@@ -153,13 +153,13 @@ Tekstejä on nyt noin 400, ja jokainen uusi ominaisuus lisää niitä. Mitä my�
 | Vaihe | Nimi | Tila |
 | :-: | :-- | :-- |
 | 1–7 | Virtanäkymä, paneelit, kipurajat, atomimalli, tiliotteen tuonti, perustamislista, roolit | ✅ Valmis |
-| 8 | Valmentaja ja keskustelu, joka muuttaa mallia tarkistetuilla komennoilla | ✅ Valmis (prompt-to-widget vaiheessa 11) |
-| 9 | Kielituki FI / EN: suomi lähteenä, englanti työkalulla, varakielenä suomi | 🔨 työn alla |
-| 10 | APEX Studio: yksi sovellus, nimet ja reitit, liikeidea omin sanoin → malli | 🔨 työn alla |
-| 11 | Prompt-to-widget: omat widgetit omalla API-avaimella, päälle/pois-kytkimet, kuvauspohjainen (ei ajettavaa koodia) | 🔨 työn alla |
-| 12 | Skenaariot ja aikakone (A/B, vaihteluvälit), yrittäjän jaksaminen, osa-alueiden tavoitteet, opiskelijan tehtävät | 🔨 työn alla |
-| 13 | Neuvonantajat, markkinatieto lähteineen, lukujen alkuperä, raportti, toteuma vs. suunnitelma | 🔨 työn alla |
-| 14 | Sesongit ja kriisit | 🔨 työn alla |
+| 8 | Valmentaja ja keskustelu, joka muuttaa mallia tarkistetuilla komennoilla | ✅ Valmis |
+| 9 | Kielituki FI / EN: suomi lähteenä, englanti työkalulla, varakielenä suomi | ✅ Valmis |
+| 10 | APEX Studio: yksi sovellus, nimet ja reitit, liikeidea omin sanoin → malli | ✅ Valmis |
+| 11 | Prompt-to-widget: omat widgetit omalla API-avaimella, päälle/pois-kytkimet, kuvauspohjainen (ei ajettavaa koodia) | ✅ Valmis |
+| 12 | Skenaariot ja aikakone (A/B, vaihteluvälit), yrittäjän jaksaminen, osa-alueiden tavoitteet, opiskelijan tehtävät | ✅ Valmis |
+| 13 | Neuvonantajat, markkinatieto lähteineen, lukujen alkuperä, raportti, toteuma vs. suunnitelma | ✅ Valmis |
+| 14 | Sesongit ja kriisit | ✅ Valmis |
 | 15 | Pilvi, käyttäjätilit ja pysyvä muisti, neuvojan asiakasmallit | |
 | 16 | War Roomin poisto, päätös toimitusketjumoduulista | |
 | 17 | Kirjanpitorajapinnat (Procountor, Netvisor) | |

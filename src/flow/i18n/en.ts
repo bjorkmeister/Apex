@@ -399,7 +399,6 @@ export const EN: Record<string, string> = {
   "Lisäsin työntekijän kiinteäksi kuluksi (3 000 € + 21 % sivukulut). Muokkaa summaa kulupaneelissa.": "I added an employee as a fixed cost (€3,000 + 21% payroll overheads). Edit the amount in the costs panel.",
   "Lisäsin uuden tulovirran: {label}. Sen vivut ilmestyivät oikealle – säädä luvut omiksesi.": "I added a new revenue stream: {label}. Its levers appeared on the right – adjust the numbers to suit you.",
   "lisätunnit = (palkka × (1 + sivukulut)) / (tuntihinta − muuttuva kulu / h)": "additional hours = (salary × (1 + side costs)) / (hourly rate − variable cost / h)",
-  "Lisää": "Add",
   "Lisää alkukassaa {amount}": "Increase opening cash by {amount}",
   "Lisää ensimmäinen tulovirta": "Add first revenue stream",
   "Lisää kassapuskuria 3 000 €": "Add €3,000 to cash buffer",
