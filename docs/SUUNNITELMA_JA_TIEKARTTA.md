@@ -1,7 +1,7 @@
 # Suunnitelma: yksi APEX, kaksi kieltä ja päivitetty tiekartta
 
-> [!IMPORTANT]
-> **Kaksi päätöstä sinulle** (lopussa): 1) mikä nimi War Roomin tilalle, 2) siirretäänkö pilotti ennen pilvipalvelua.
+> [!NOTE]
+> **Päätökset tehty 22.10.2026:** nimi on **APEX Studio**, tiekartta (pilotti ennen pilveä) on hyväksytty ja prompt-to-widget tulee pilotin jälkeen. Kielituen toteutustapa on kuvattu luvussa 2.
 
 ---
 
@@ -71,25 +71,46 @@ flowchart LR
 
 ---
 
-## 2. Kieli: suomi ja englanti
+## 2. Kieli: suomi ja englanti ilman kaksinkertaista työtä
 
-### Periaatteet
-1. **Kieli ja maa ovat eri asioita.** YEL, PRH ja ALV ovat Suomen lakia, eivät suomen kieltä. Englanninkielinen käyttäjä voi perustaa yrityksen Suomeen ("Finnish entrepreneur's pension insurance (YEL)"). Siksi perustamislistan sisältö on **maapaketti** (`FI`), joka on erillään kielestä. Myöhemmin samaan rakenteeseen voi lisätä muita maita.
-2. **Laskentaytimessä ei ole tekstiä.** Ydin on jo nyt lähes kielivapaa; vain esimerkkien nimet ja tulovirtojen otsikot siirretään käännöksiin.
-3. **Kääntämättä jääneet tekstit huomataan testeissä.** Englanninkielisellä tiedostolla on sama tyyppi kuin suomenkielisellä, ja testi tarkistaa, että avaimet ja muuttujat täsmäävät.
+### Periaate: kirjoita kerran, käännä työkalulla
+Tekstit kirjoitetaan **vain suomeksi**, ja suomi on lähdekieli. Englanti tuotetaan työkalulla ja tarkistetaan ihmisen toimesta. Kukaan ei kirjoita samaa tekstiä kahteen kertaan, eikä englanti koskaan estä julkaisua.
 
-### Vaiheet
+```mermaid
+flowchart LR
+  A["Suomenkielinen teksti koodissa: fi.ts"] --> B["Käännöstyökalu: npm run i18n"]
+  B --> C["en.ts: vain puuttuvat ja muuttuneet avaimet"]
+  C --> D["Ihminen tarkistaa merkityt"]
+  D --> E["Julkaisu"]
+  A -.->|"englannin puuttuessa"| F["Käyttäjä näkee suomen, ei virhettä"]
+```
 
-| Vaihe | Sisältö | Koko |
-| :-- | :-- | :-- |
-| **I1 Perusta** | Käännöstiedostot `fi.ts` ja `en.ts`, käännösfunktio `t(avain, arvot)`, luvut ja päivämäärät kielen mukaan (`1 234 €` vs `€1,234`). Kielivalinta yläpalkkiin ja `?lang=en`; oletus selaimen kielestä; valinta tallentuu. | pieni |
-| **I2 Tekstien siirto** | Noin 400 tekstiä: pääkortit, valmentaja, perustamislista, vivut, paneelit, roolit, tuonti. Kaavat ja selitykset käännetään sisältöineen. | suurin |
-| **I3 Keskustelu** | Kielimallille ohje vastata käyttäjän kielellä. Komentotulkkiin englanninkieliset muodot ("raise prices 10%", "payment terms 14 days", "hire", "add cost office 600"). | pieni |
-| **I4 Maapaketti ja ohjeet** | Perustamislista dataksi (`FI`), viranomaisluvut yhteen tarkistettavaan paikkaan, englanninkielinen käyttöohje. | pieni |
+| Osa | Miten |
+| :-- | :-- |
+| **Lähde** | `fi.ts` on ainoa paikka, jonne tekstit kirjoitetaan. Koodissa ei ole kovakoodattuja tekstejä (testi tarkistaa tämän). |
+| **Käännös** | Työkalu vertaa suomen tiivisteitä (hash) englantiin ja kääntää vain **uudet ja muuttuneet** avaimet käyttäjän omalla API-avaimella (sama BYOK kuin muualla). Käännökset merkitään *"tarkistamatta"*, kunnes joku hyväksyy ne. |
+| **Sanasto** | Yksi sanastotiedosto pitää termit yhtenäisinä: kate = *contribution margin*, kannattavuusraja = *break-even point*, myyntisaaminen = *accounts receivable*, YEL = *YEL (Finnish entrepreneur's pension insurance)*. Työkalu saa sanaston mukaan, ja siksi talouden termit eivät vaihtele. |
+| **Varakieli** | Jos englanninkielinen teksti puuttuu tai on tarkistamatta, käyttäjä näkee suomen eikä sovellus kaadu. Englanti voi valmistua vähitellen. |
+| **Muuttuva sisältö** | Valmentajan lauseet rakennetaan **mallipohjista ja luvuista**, ei valmiista lauseista. Näin jokainen lause käännetään kerran, ja luvut ja päivämäärät muotoillaan kielen mukaan (`1 234 €` vs `€1,234`). |
+| **Käyttäjän oma sisältö** | Yrityksen nimi, tulovirtojen nimet ja keskustelu pysyvät käyttäjän kielellä, joten niitä ei käännetä. Kielimalli vastaa käyttäjän kielellä yhdellä lisäohjeella. |
+| **Maa erillään kielestä** | Perustamislistan viranomaisasiat (YEL, PRH, ALV) ovat Suomen **maapaketti**. Englanninkielinen käyttäjä voi perustaa yrityksen Suomeen, ja maapaketin selitykset käännetään samalla työkalulla. |
 
-**Miksi kieli ennen yhdistämistä?** Kaikki yhdistämisessä siirrettävä koodi kirjoitetaan silloin heti kaksikieliseksi. War Roomia ei käännetä lainkaan, koska se poistetaan.
+### Mitä emme tee
+- **Emme käännä sovellusta lennossa kielimallilla jokaiselle käyttäjälle:** se maksaisi tokeneita jokaisella käynnillä, tulos vaihtelisi ja talouden termit kääntyisivät väärin.
+- **Emme käännä War Roomia:** se poistetaan.
+- **Emme pidä englantia suomen kanssa samanaikaisena vaatimuksena:** englanti saa jäädä jälkeen, ja se ei estä uutta ominaisuutta.
 
----
+### Milloin tämä kannattaa tehdä: heti, mutta kevyesti
+Tekstejä on nyt noin 400, ja jokainen uusi ominaisuus lisää niitä. Mitä myöhemmin tekstit siirretään käännöstiedostoon, sitä enemmän siirrettävää on. Pullonkaulaa ei synny, koska englanti on jälkijättöinen.
+
+| Vaihe | Sisältö | Estääkö julkaisun? |
+| :-- | :-- | :-: |
+| **I1 Perusta** | käännösfunktio `t()`, luku- ja päivämäärämuodot, kielivalinta, tarkistustesti "ei kovakoodattuja tekstejä", sanasto, käännöstyökalu | Ei |
+| **I2 Tekstien siirto** | kaikki nykyiset suomenkieliset tekstit siirretään `fi.ts`:ään. Työ on mekaaninen eikä muuta toimintaa. **Tämä on ainoa kertakustannus.** | Ei |
+| **I3 Englanti** | työkalu kääntää, ihminen tarkistaa näkyvimmät kohdat (aloitus, pääkortit, valmentaja). Komentotulkkiin lisätään englanninkieliset muodot ("raise prices 10%"). | Ei |
+| **Jatkuva** | uusi teksti kirjoitetaan suomeksi `fi.ts`:ään. Työkalu tuottaa englannin, ja tarkistus on osa julkaisua, mutta ei sen este. | Ei |
+
+**Pilotti voidaan ajaa suomeksi.** Pilotin käyttäjät ovat todennäköisesti suomalaisia, joten englannin ei tarvitse olla valmis ennen pilottia. Englannin tarkistus ja käyttöohje tulevat julkaisulle ennen kansainvälistä jakelua. Perusta (I1–I2) tehdään silti ennen yhdistämistä, jotta War Roomista siirretty koodi kirjoitetaan heti `t()`-kutsuilla.
 
 ## 3. Miten roolit vaikuttavat tällä hetkellä
 
@@ -119,36 +140,58 @@ flowchart LR
 | :-- | :-- | :-- |
 | Opiskelija | **Tehtävät:** esim. "Pelasta kassa", "Löydä kannattavuusraja", "Kestä −25 % myynti". Tavoite ja tarkistus. Myöhemmin opettajatila. | 11 |
 | Perustaja | Liikeidea omin sanoin (U1) | 10 |
-| Yrittäjä | Toteutuma vs. suunnitelma: tiliote rinnakkain mallin kanssa | 13 |
-| Osa-aluejohtaja | Tavoitteet näkökulmalle (esim. myyntikate ≥ 40 %), ja rajapinta varoittaa, jos ne rikkoutuvat | 12 |
-| Toimitusjohtaja | Skenaariovertailu ja neuvonantajat (U2, U3) | 12–13 |
-| Neuvoja | Useita asiakasmalleja ja jaettava linkki (vaatii pilven) | 15 |
-| Rahoittaja | Stressiruudukko, vaihteluvälit ja raportti (U2, U6) | 12–13 |
+| Yrittäjä | Toteutuma vs. suunnitelma: tiliote rinnakkain mallin kanssa | 14 |
+| Osa-aluejohtaja | Tavoitteet näkökulmalle (esim. myyntikate ≥ 40 %), ja rajapinta varoittaa, jos ne rikkoutuvat | 13 |
+| Toimitusjohtaja | Skenaariovertailu ja neuvonantajat (U2, U3) | 13–14 |
+| Neuvoja | Useita asiakasmalleja ja jaettava linkki (vaatii pilven) | 16 |
+| Rahoittaja | Stressiruudukko, vaihteluvälit ja raportti (U2, U6) | 13–14 |
 
 ---
 
-## 4. Päivitetty tiekartta
+## 4. Tiekartta (hyväksytty 22.10.2026)
 
 | Vaihe | Nimi | Tila |
 | :-: | :-- | :-- |
-| 1–8 | Virtanäkymä, paneelit, kipurajat, atomimalli, tiliotteen tuonti, perustamislista, roolit, valmentaja | ✅ **Valmis** (61 testiä, GitHub) |
-| **9** | **Kielituki FI / EN** (I1–I4) | 🆕 seuraava |
+| 1–7 | Virtanäkymä, paneelit, kipurajat, atomimalli, tiliotteen tuonti, perustamislista, roolit | ✅ Valmis |
+| 8 | Valmentaja ja keskustelu, joka muuttaa mallia tarkistetuilla komennoilla | ✅ Valmis **ilman prompt-to-widgetiä** (siirretty vaiheeseen 12) |
+| **9** | **Kielituki FI / EN** (I1–I3, kirjoita kerran, käännä työkalulla) | 🆕 seuraava |
 | **10** | **APEX Studio** (U0–U1): nimet, reitit, liikeidea omin sanoin → malli | 🆕 |
-| **11** | **Pilotti 5–10 käyttäjällä** sekä palautetyökalu sovelluksessa ja opiskelijan tehtävät | ⬆️ siirretty aiemmaksi (oli 11/12) |
-| 12 | Skenaariot ja aikakone (U2), yrittäjän jaksaminen, osa-alueiden tavoitteet | (oli 10) |
-| 13 | Neuvonantajat, markkinatieto lähteineen, raportti, toteutuma vs. suunnitelma (U3, U4, U6) | 🆕 War Roomista |
-| 14 | Sesongit ja kriisit (U5) | (tiekartan kohta 7.4) |
-| 15 | Pilvi, käyttäjätilit ja pysyvä muisti, neuvojan asiakasmallit | ⬇️ siirretty myöhemmäksi (oli 9) |
-| 16 | War Roomin poisto; päätös toimitusketjumoduulista (U7–U8) | 🆕 |
-| 17 | Kirjanpitorajapinnat (Procountor, Netvisor) | (oli 12) |
+| **11** | **Pilotti 5–10 käyttäjällä** (suomeksi), palautetyökalu sovelluksessa ja opiskelijan tehtävät | ⬆️ ennen pilveä |
+| **12** | **Prompt-to-widget: omat widgetit** omalla API-avaimella, päälle/pois-kytkimet, kuvauspohjainen (ei ajettavaa koodia) | 🆕 pilotin jälkeen |
+| 13 | Skenaariot ja aikakone, yrittäjän jaksaminen, osa-alueiden tavoitteet | (oli 12) |
+| 14 | Neuvonantajat, markkinatieto lähteineen, raportti, toteutuma vs. suunnitelma | |
+| 15 | Sesongit ja kriisit | |
+| 16 | Pilvi, käyttäjätilit ja pysyvä muisti, neuvojan asiakasmallit | ⬇️ myöhemmäksi |
+| 17 | War Roomin poisto, päätös toimitusketjumoduulista | |
+| 18 | Kirjanpitorajapinnat (Procountor, Netvisor) | |
 
-**Miksi pilotti ennen pilveä?** Saamasi kriittinen palaute osui tähän: maksuhalukkuus pitää todistaa ennen raskasta infraa. Pilotti onnistuu ilman pilveä, koska malli tallentuu testaajan selaimeen. Pilvi rakennetaan vasta, kun tiedetään, mitä käyttäjät oikeasti tekevät.
+### Vaihe 12: Prompt-to-widget
+
+Käyttäjä pyytää omin sanoin uutta toimintoa, ja kielimalli palauttaa **widgetin kuvauksen** (JSON), ei ohjelmakoodia. Kuvauksen piirtää meidän oma tarkistettu koodimme valmiista palikoista. Näin kielimallin virhe tai manipulointi ei pääse käsiksi käyttäjän tietoihin tai API-avaimeen.
+
+| Palikka | Esimerkki |
+| :-- | :-- |
+| Luku tai kortti | "Suurimman asiakkaan osuus myynnistä" |
+| Laskukaava | tuntikate = (tuntihinta − muuttuva kulu) × laskutusaste. Lasketaan omalla pienellä tulkilla, joka tuntee vain mallin luvut ja peruslaskutoimitukset. |
+| "Mitä jos" -vipu | oma liukusäädin mallin lukuun |
+| Hälytyssääntö | "varoita, jos kassa < 2 kk kuluja" |
+| Kuvaaja tai taulukko | kassa kuukausittain |
+
+- **Hallinta:** päälle/pois-kytkin, muokkaus, poisto ja merkintä *"tekoälyn luoma, pyyntö: …"*. Widgetit tallentuvat mallin mukana, ja luomisen voi kumota.
+- **Kustannus:** käyttäjän omat tokenit (nykyinen BYOK-avain). Ilman avainta ovat käytössä valmiit mallipohjat ja jo luodut widgetit.
+- **Rajaus:** aidosti uutta laskentalogiikkaa (jota malli ei tunne) tämä ei kata. Se vaatisi erillisen eristetyn ratkaisun, ja siitä päätetään pilotin jälkeen.
+
+**Miksi pilotin jälkeen?** Pilotti kertoo, mitä käyttäjät oikeasti yrittävät tehdä, ja siitä saadaan oikeat valmiit palikat. Vaihe 8 on silti riittävä pilottiin, koska keskustelu osaa jo lisätä tulovirtoja, kuluja ja maksuehtoja.
 
 ---
 
-## 5. Päätökset sinulle
+## 5. Päätökset
 
-1. **Nimi:** APEX Studio (suositus), APEX Työpöytä / Workspace vai APEX Ohjaamo / Cockpit, vai jokin muu?
-2. **Järjestys:** hyväksytkö, että pilotti (11) tulee ennen pilvipalvelua (15)? Vaihtoehto on pitää alkuperäinen järjestys, jossa pilvi rakennetaan ensin.
+| Päätös | Tulos |
+| :-- | :-- |
+| Nimi War Roomin tilalle | **APEX Studio** ✅ |
+| Pilotti ennen pilveä | **Hyväksytty** ✅ |
+| Prompt-to-widget | **Pilotin jälkeen (vaihe 12)** ✅ |
+| Kielituen toteutustapa | Kirjoita kerran suomeksi, englanti työkalulla, varakieli suomi. Odottaa hyväksyntääsi. |
 
-Kun nämä on päätetty, aloitan vaiheesta 9 (kielituki).
+Seuraava askel on vaihe 9 (kielituki), kun hyväksyt kielituen toteutustavan ja annat luvan aloittaa koodauksen.
