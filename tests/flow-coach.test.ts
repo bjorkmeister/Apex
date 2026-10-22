@@ -85,6 +85,18 @@ describe("APEX Flow — valmentaja", () => {
   });
 });
 
+describe("APEX Flow — tyhjästä aloitus", () => {
+  it("10. Ilman kiinteitä kuluja malli ei näytä 'terveeltä' vaan valmentaja pyytää lisäämään kulut", async () => {
+    const { emptyMolecule } = await import("../src/flow/kernel/index.ts");
+    const { addAtom } = await import("../src/flow/model/edit.ts");
+    const m = addAtom(emptyMolecule(), "TRANSACTIONAL_TRADE");
+    const list = insightsFor(m, "student");
+    assert.ok(list.some((i) => i.id === "no-fixed-costs"));
+    assert.ok(!list.some((i) => i.id === "healthy"));
+    assert.equal(buildView(m).headlines[2].value, "Ei kiinteitä kuluja");
+  });
+});
+
 describe("APEX Flow — komentotulkki ilman kielimallia", () => {
   const m = createPreset("it_consultant");
   it("7. Ymmärtää hinnan, maksuajan, rekryn, kulun, uuden tulovirran ja stressitestin", () => {

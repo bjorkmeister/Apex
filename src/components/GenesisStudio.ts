@@ -99,6 +99,7 @@ export function renderGenesisTabulaRasa(props: GenesisStudioProps): string {
           </div>
         </div>
         <div class="topbar-actions">
+          <a href="/flow" title="Uusi toimialasta riippumaton virtanäkymä: tunnit, tavarat, tilaukset ja tiskimyynti samassa mallissa" style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid #38bdf8;border-radius:8px;color:#e0f2fe;text-decoration:none;font-size:13px;background:rgba(14,116,144,0.25)">🌊 Kokeile APEX Flow (beta)</a>
           ${renderApiTelemetryPillHtml(maskedCfg)}
         </div>
       </header>

@@ -229,8 +229,23 @@ function nextStepInsight(cl: ChecklistView, persona: PersonaId): CoachInsight | 
   };
 }
 
+function noFixedCostsInsight(v: FlowView): CoachInsight | null {
+  if (v.isEmpty || v.monthlyFixed > 0) return null;
+  return {
+    id: "no-fixed-costs",
+    severity: "warn",
+    title: "Mallissa ei ole vielä kiinteitä kuluja",
+    body: "Ilman kiinteitä kuluja jokainen yritys näyttää kannattavalta. Lisää ainakin oma palkkasi, toimitila ja kirjanpito – vasta silloin luvut kertovat totuuden.",
+    learn: "Kiinteät kulut maksetaan joka kuukausi myynnistä riippumatta. Kannattavuusraja on se myynti, jonka kate kattaa ne.",
+    actions: [
+      { label: "Lisää oma palkka 2 500 € / kk", commands: [{ type: "add_fixed_cost", label: "Oma palkka (nosto)", amountPerMonth: 2500, dayOfMonth: 15, category: "other" }] },
+      { label: "Avaa kulut", commands: [{ type: "open_panel", panel: "costs" }] },
+    ],
+  };
+}
+
 function goodInsight(v: FlowView): CoachInsight | null {
-  if (v.isEmpty || v.sim.cashOutDay !== null || v.firstMonthProfit <= 0 || (v.be.marginOfSafety ?? 0) < 0.15) return null;
+  if (v.isEmpty || v.monthlyFixed <= 0 || v.sim.cashOutDay !== null || v.firstMonthProfit <= 0 || (v.be.marginOfSafety ?? 0) < 0.15) return null;
   return {
     id: "healthy",
     severity: "good",
@@ -255,6 +270,7 @@ export function coachInsights(m: Molecule, v: FlowView, cl: ChecklistView, perso
   const list = [
     cashInsight(m, v),
     lossInsight(m, v),
+    noFixedCostsInsight(v),
     bottleneckInsight(m, v),
     subscriptionInsight(m),
     marginInsight(v),

@@ -95,7 +95,14 @@ export function buildView(molecule: Molecule): FlowView {
           status: "alert",
         };
   let beHeadline: Headline;
-  if (be.breakEvenVolume) {
+  if (!isEmpty && monthlyFixed <= 0) {
+    beHeadline = {
+      label: "Kannattavuusraja",
+      value: "Ei kiinteitä kuluja",
+      sub: "lisää oma palkka, tilat ja muut kulut",
+      status: "warn",
+    };
+  } else if (be.breakEvenVolume) {
     const unitWord = be.breakEvenVolume.unit;
     beHeadline = {
       label: "Kannattavuusraja",
