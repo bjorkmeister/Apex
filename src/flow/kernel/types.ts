@@ -154,6 +154,8 @@ export interface AtomEconomics {
   volumeUnit: string;
   /** Kysyntä kuukaudessa (sama yksikkö). */
   demand: number;
+  /** Tosi, jos kysyntää ei ole annettu ja oletetaan, että se riittää koko kapasiteetille. */
+  demandAssumed: boolean;
   /** Kapasiteetti kuukaudessa. `null` = ei rajoitetta. */
   capacity: number | null;
   /** Kysyntä, jota ei pystytä palvelemaan kapasiteetin takia. */

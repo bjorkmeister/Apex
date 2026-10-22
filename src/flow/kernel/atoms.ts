@@ -52,6 +52,7 @@ function timeEconomics(atom: TimeCapacityAtom, terms: number): AtomEconomics {
   const price = nonNeg(atom.hourlyRate);
   const unitVar = nonNeg(atom.variableCostPerHour);
   return finish(atom, terms, {
+    demandAssumed: atom.demandHoursPerMonth === null,
     volume,
     volumeUnit: "h",
     demand,
@@ -136,6 +137,7 @@ function tradeEconomics(atom: TransactionalTradeAtom, terms: number): AtomEconom
 }
 
 interface PartialEconomics {
+  demandAssumed?: boolean;
   volume: number;
   volumeUnit: string;
   demand: number;
@@ -159,6 +161,7 @@ function finish(atom: RevenueAtom, terms: number, p: PartialEconomics): AtomEcon
     volume: p.volume,
     volumeUnit: p.volumeUnit,
     demand: p.demand,
+    demandAssumed: p.demandAssumed ?? false,
     capacity: p.capacity,
     lostDemand,
     idleCapacity: idle,

@@ -113,7 +113,7 @@ export function emptyMolecule(name = "Uusi yritys"): Molecule {
 export type PresetId = "it_consultant" | "food_kiosk" | "saas_hybrid" | "webshop";
 
 export const PRESET_LABELS: Record<PresetId, { title: string; hint: string }> = {
-  it_consultant: { title: "IT-konsultti (yksinyrittäjä)", hint: "Aika-atomi + 30 pv maksuaika" },
+  it_consultant: { title: "IT-konsultti (yksinyrittäjä)", hint: "Tuntityö, laskut 30 pv maksuajalla" },
   food_kiosk: { title: "Ruokakioski", hint: "Tiskimyynti, kortti- ja käteismaksut" },
   saas_hybrid: { title: "Ohjelmistoyritys", hint: "Kuukausitilaukset + konsultointitunnit" },
   webshop: { title: "Verkkokauppa", hint: "Varasto, hävikki, sitoutunut raha" },

@@ -53,6 +53,7 @@ import {
   renderLlmConfigModal,
 } from "../components";
 import { WAR_ROOM_CSS } from "./styles";
+import { handleFlowRequest } from "../flow/server/routes.ts";
 import {
   renderWarRoomDashboard,
   type TwoPhaseActionFeedback,
@@ -1134,6 +1135,8 @@ export function createApexWarRoomServer(
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
+
+      if (handleFlowRequest(req, res, url.pathname)) return;
 
       if (req.method === "GET" && url.pathname === "/") {
         const payload = buildViewPayload(session);
