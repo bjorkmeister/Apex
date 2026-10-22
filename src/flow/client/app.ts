@@ -24,18 +24,24 @@ import {
 import { esc, eur, int, num, pct } from "../model/format.ts";
 import { FlowCanvas, renderTimeline } from "./canvas.ts";
 import { renderDrawer } from "./drawer.ts";
+import { renderLaunchpad } from "./launchpad.ts";
+import { checklistView, emptyChecklist, setItemParam, toggleItem, type ChecklistState } from "../model/launchpad.ts";
 
 const STORAGE_KEY = "apex.flow.v1";
+
+type PanelId = NodeId | "launchpad";
 
 interface PersistedState {
   version: 1;
   molecule: Molecule | null;
+  checklist?: ChecklistState;
 }
 
 interface AppState {
   molecule: Molecule | null;
   view: FlowView | null;
-  drawer: NodeId | null;
+  checklist: ChecklistState;
+  drawer: PanelId | null;
   stress: StressResult | null;
   showAllLevers: boolean;
   day: number;
@@ -47,6 +53,7 @@ interface AppState {
 const state: AppState = {
   molecule: null,
   view: null,
+  checklist: emptyChecklist(),
   drawer: null,
   stress: null,
   showAllLevers: false,
@@ -77,6 +84,7 @@ function load(): void {
     if (!raw) return;
     const parsed = JSON.parse(raw) as PersistedState;
     if (parsed && parsed.version === 1 && isMolecule(parsed.molecule)) state.molecule = parsed.molecule;
+    if (parsed?.checklist && typeof parsed.checklist.items === "object") state.checklist = parsed.checklist;
   } catch {
     // Rikkinäinen tallenne: aloitetaan puhtaalta pöydältä.
   }
@@ -84,7 +92,7 @@ function load(): void {
 
 function save(): void {
   try {
-    const data: PersistedState = { version: 1, molecule: state.molecule };
+    const data: PersistedState = { version: 1, molecule: state.molecule, checklist: state.checklist };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   } catch {
     // Selaimen tallennustila täynnä tai estetty: sovellus toimii silti istunnon ajan.
@@ -148,6 +156,7 @@ function renderShell(): void {
     <div class="fl-brand">APEX <b>Flow</b> <span class="fl-beta">beta</span></div>
     <input class="fl-name" data-rename-molecule value="${esc(m.name)}" aria-label="Yrityksen nimi"/>
     <div class="fl-header-actions">
+      <button class="fl-btn" data-action="open" data-node="launchpad" id="fl-lp-btn">🚀 Perustamislista <span class="fl-badge" id="fl-lp-count"></span></button>
       <button class="fl-btn ghost" data-action="reset">Aloita alusta</button>
     </div>
   </header>
@@ -262,7 +271,10 @@ function renderDrawerNow(): void {
     return;
   }
   withPreservedFocus(drawer, () => {
-    drawer.innerHTML = renderDrawer(state.drawer!, { view: state.view!, stress: state.stress });
+    drawer.innerHTML =
+      state.drawer === "launchpad"
+        ? renderLaunchpad(checklistView(state.molecule!, state.view!, state.checklist))
+        : renderDrawer(state.drawer!, { view: state.view!, stress: state.stress });
   });
   drawer.classList.add("open");
   drawer.setAttribute("aria-hidden", "false");
@@ -281,6 +293,9 @@ function refresh(opts: { levers?: boolean; persist?: boolean } = {}): void {
   renderTimelineNow();
   if (opts.levers) renderLevers();
   else updateLeverOutputs();
+  const lp = checklistView(state.molecule, state.view, state.checklist);
+  const badge = $("#fl-lp-count");
+  if (badge) badge.textContent = `${lp.done}/${lp.total}`;
   if (state.drawer) renderDrawerNow();
   if (opts.persist) save();
 }
@@ -293,7 +308,7 @@ function updateLeverOutputs(): void {
   }
 }
 
-function openDrawer(id: NodeId): void {
+function openDrawer(id: PanelId): void {
   state.drawer = id;
   state.stress = null;
   renderDrawerNow();
@@ -399,12 +414,13 @@ root.addEventListener("click", (ev) => {
       if (!confirm("Aloitetaanko alusta? Nykyinen malli poistetaan tästä selaimesta.")) return;
       stop();
       state.molecule = null;
+      state.checklist = emptyChecklist();
       state.drawer = null;
       save();
       renderOnboarding();
       return;
     case "open":
-      openDrawer(target.dataset.node as NodeId);
+      openDrawer(target.dataset.node as PanelId);
       return;
     case "close-drawer":
       closeDrawer();
@@ -487,6 +503,21 @@ root.addEventListener("change", (ev) => {
     refresh({ levers: true, persist: true });
     return;
   }
+  if (t.dataset.lpToggle) {
+    const r = toggleItem(m, state.checklist, t.dataset.lpToggle, t.checked);
+    state.checklist = r.checklist;
+    setMolecule(r.molecule, true);
+    return;
+  }
+  if (t.dataset.lpParam) {
+    const [id, key] = t.dataset.lpParam.split(":");
+    const v = parseNullableNumber(t.value);
+    if (v === null) return;
+    const r = setItemParam(m, state.checklist, id, key, v);
+    state.checklist = r.checklist;
+    setMolecule(r.molecule, true);
+    return;
+  }
   if (t.hasAttribute("data-rename-molecule")) {
     setMolecule(renameMolecule(m, t.value));
     return;
@@ -530,7 +561,7 @@ load();
 // Jaettavat esimerkkilinkit: /flow?preset=it_consultant (&open=receivables avaa paneelin).
 const params = new URLSearchParams(location.search);
 const presetParam = params.get("preset");
-const openParam = params.get("open") as NodeId | null;
+const openParam = params.get("open") as PanelId | null;
 if (presetParam && presetParam in PRESET_LABELS) {
   state.molecule = createPreset(presetParam as PresetId);
   save();
@@ -539,7 +570,7 @@ if (presetParam && presetParam in PRESET_LABELS) {
 if (state.molecule) {
   renderShell();
   refresh({ levers: true });
-  if (openParam && ["demand", "capacity", "receivables", "cash", "costs"].includes(openParam)) openDrawer(openParam);
+  if (openParam && ["demand", "capacity", "receivables", "cash", "costs", "launchpad"].includes(openParam)) openDrawer(openParam);
   else play();
 } else {
   renderOnboarding();
