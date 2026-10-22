@@ -8,7 +8,7 @@
     "dev": "node --no-warnings --import ./scripts/register-loader.mjs src/app/server.ts",
     "start": "node --no-warnings --import ./scripts/register-loader.mjs src/app/server.ts",
     "sim": "node --no-warnings --import ./scripts/register-loader.mjs scripts/simulate.ts",
-    "test": "node --no-warnings --import ./scripts/register-loader.mjs --test tests/engine.test.ts tests/llm.test.ts"
+    "test": "node --no-warnings --import ./scripts/register-loader.mjs --test tests/engine.test.ts tests/llm.test.ts tests/flow-*.test.ts"
   },
   "dependencies": {
     "zod": "^4.3.6"
