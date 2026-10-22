@@ -1,41 +1,100 @@
 /**
- * APEX Flow — mallin muutoskomennot (`src/flow/model/commands.ts`).
+ * APEX Studio — mallin muutoskomennot (`src/flow/model/commands.ts`).
  *
- * Tämä on "In-Flight Mutation" -sopimus: valmentaja, keskusteleva tekoäly ja
- * sääntöpohjainen komentotulkki muuttavat mallia vain näillä komennoilla.
- * Jokainen komento validoidaan ennen käyttöä, joten kielimallin vastaus ei voi
- * rikkoa mallia tai kirjoittaa sallittujen kenttien ulkopuolelle.
+ * Tämä on "In-Flight Mutation" -sopimus: valmentaja, keskusteleva tekoäly,
+ * liikeidean tulkki, neuvonantajat, markkinatieto ja tiliotteen tuonti muuttavat
+ * mallia vain näillä komennoilla. Jokainen komento validoidaan ennen käyttöä,
+ * joten kielimallin vastaus ei voi rikkoa mallia tai kirjoittaa sallittujen
+ * kenttien ulkopuolelle. Muutettujen lukujen alkuperä tallennetaan.
  */
-import type { AtomKind, FixedCostCategory, Molecule } from "../kernel/types.ts";
-import { ATOM_KIND_LABELS } from "../kernel/presets.ts";
+import type { AtomKind, FixedCostCategory, Molecule, ProvenanceSource } from "../kernel/types.ts";
+import { ATOM_KIND_LABELS, newId } from "../kernel/presets.ts";
 import type { StressInput } from "../kernel/sensitivity.ts";
-import { addAtom, addFixedCost, isEditableField, removeAtom, removeFixedCost, setAtomField } from "./edit.ts";
+import { addAtom, addFixedCost, isEditableField, removeAtom, removeFixedCost, renameMolecule, setAtomField } from "./edit.ts";
 import { toggleItem, CHECKLIST, type ChecklistState } from "./launchpad.ts";
+import { provKey, pruneProvenance, withProvenance } from "./provenance.ts";
 import type { NodeId } from "./view.ts";
+import { msg, t } from "../i18n/index.ts";
 
-export type PanelId = NodeId | "launchpad" | "coach" | "import";
+export type PanelId =
+  | NodeId
+  | "launchpad"
+  | "coach"
+  | "import"
+  | "widgets"
+  | "scenarios"
+  | "advisors"
+  | "market"
+  | "seasons"
+  | "founder"
+  | "goals"
+  | "report"
+  | "actuals"
+  | "tasks";
+
+export const PANELS: PanelId[] = [
+  "demand", "capacity", "receivables", "cash", "costs", "launchpad", "coach", "import", "widgets",
+  "scenarios", "advisors", "market", "seasons", "founder", "goals", "report", "actuals", "tasks",
+];
+
+export interface EventPayload {
+  title: string;
+  startMonth: number;
+  durationMonths: number;
+  volumeChange?: number;
+  priceChange?: number;
+  variableCostChange?: number;
+  fixedCostChange?: number;
+  oneOffCost?: number;
+  libraryId?: string;
+}
 
 export type FlowCommand =
   | { type: "set_atom_field"; atomId: string; field: string; value: number | null }
   | { type: "scale_atom_field"; atomId: string; field: string; factor: number }
   | { type: "set_credit"; field: "customerTermsDays" | "supplierTermsDays" | "openingCash"; value: number }
-  | { type: "add_atom"; kind: AtomKind; label?: string; params?: Record<string, number> }
+  | { type: "add_atom"; kind: AtomKind; label?: string; params?: Record<string, number | null> }
   | { type: "remove_atom"; atomId: string }
   | { type: "add_fixed_cost"; label: string; amountPerMonth: number; dayOfMonth?: number; category?: FixedCostCategory }
   | { type: "remove_fixed_cost"; id: string }
   | { type: "checklist"; id: string; checked: boolean }
   | { type: "open_panel"; panel: PanelId }
-  | { type: "stress"; stress: StressInput };
+  | { type: "stress"; stress: StressInput }
+  | { type: "set_name"; name: string }
+  | { type: "add_event"; event: EventPayload }
+  | { type: "remove_event"; id: string }
+  | { type: "set_seasonality"; factors: number[] }
+  | { type: "set_start_month"; month: number }
+  | { type: "set_founder"; weeklyHours?: number; livingCostsPerMonth?: number };
 
 const KINDS: AtomKind[] = ["TIME_CAPACITY", "PHYSICAL_MATTER", "RECURRING_SUB", "TRANSACTIONAL_TRADE"];
 const CREDIT_FIELDS = ["customerTermsDays", "supplierTermsDays", "openingCash"] as const;
 const CATEGORIES: FixedCostCategory[] = ["rent", "admin", "insurance", "pension", "software", "marketing", "other"];
-const PANELS: PanelId[] = ["demand", "capacity", "receivables", "cash", "costs", "launchpad", "coach"];
 
 const isObj = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
 const isNum = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x);
 const isStr = (x: unknown, max = 80): x is string => typeof x === "string" && x.trim().length > 0 && x.length <= max;
-const ratio = (x: unknown): number | undefined => (isNum(x) && x > -1 && x < 10 ? x : undefined);
+const ratio = (x: unknown, lo = -1, hi = 10): number | undefined => (isNum(x) && x >= lo && x <= hi ? x : undefined);
+
+function validateEvent(raw: unknown): EventPayload | null {
+  if (!isObj(raw) || !isStr(raw.title, 80)) return null;
+  const start = isNum(raw.startMonth) ? Math.round(raw.startMonth) : 0;
+  const dur = isNum(raw.durationMonths) ? Math.round(raw.durationMonths) : 1;
+  if (start < 0 || start > 11 || dur < 1 || dur > 12) return null;
+  const e: EventPayload = {
+    title: raw.title.trim(),
+    startMonth: start,
+    durationMonths: dur,
+    volumeChange: ratio(raw.volumeChange, -1, 5),
+    priceChange: ratio(raw.priceChange, -0.9, 5),
+    variableCostChange: ratio(raw.variableCostChange, -0.9, 5),
+    fixedCostChange: ratio(raw.fixedCostChange, -0.9, 5),
+    oneOffCost: isNum(raw.oneOffCost) && raw.oneOffCost >= 0 && raw.oneOffCost <= 1e7 ? raw.oneOffCost : undefined,
+    libraryId: typeof raw.libraryId === "string" ? raw.libraryId.slice(0, 40) : undefined,
+  };
+  const hasEffect = [e.volumeChange, e.priceChange, e.variableCostChange, e.fixedCostChange, e.oneOffCost].some((x) => x !== undefined && x !== 0);
+  return hasEffect ? e : null;
+}
 
 /** Validoi tuntemattoman syötteen (esim. kielimallin JSON) komennoksi. Palauttaa `null`, jos komento ei kelpaa. */
 export function validateCommand(raw: unknown, m: Molecule): FlowCommand | null {
@@ -55,19 +114,14 @@ export function validateCommand(raw: unknown, m: Molecule): FlowCommand | null {
       if (raw.field !== "openingCash" && raw.value > 365) return null;
       return { type: "set_credit", field: raw.field as (typeof CREDIT_FIELDS)[number], value: raw.value };
     case "add_atom": {
-      if (!KINDS.includes(raw.kind as AtomKind)) return null;
-      const params: Record<string, number> = {};
+      if (!KINDS.includes(raw.kind as AtomKind) || m.atoms.length >= 12) return null;
+      const params: Record<string, number | null> = {};
       if (isObj(raw.params)) {
         for (const [k, v] of Object.entries(raw.params)) {
-          if (isNum(v) && isEditableField(raw.kind as AtomKind, k)) params[k] = v;
+          if ((isNum(v) || v === null) && isEditableField(raw.kind as AtomKind, k)) params[k] = v;
         }
       }
-      return {
-        type: "add_atom",
-        kind: raw.kind as AtomKind,
-        label: isStr(raw.label, 60) ? raw.label.trim() : undefined,
-        params,
-      };
+      return { type: "add_atom", kind: raw.kind as AtomKind, label: isStr(raw.label, 60) ? raw.label.trim() : undefined, params };
     }
     case "remove_atom":
       return atom && m.atoms.length > 1 ? { type: "remove_atom", atomId: atom.id } : null;
@@ -98,74 +152,106 @@ export function validateCommand(raw: unknown, m: Molecule): FlowCommand | null {
       };
       return Object.values(stress).some((v) => v !== undefined) ? { type: "stress", stress } : null;
     }
+    case "set_name":
+      return isStr(raw.name, 80) ? { type: "set_name", name: raw.name.trim() } : null;
+    case "add_event": {
+      if ((m.events?.length ?? 0) >= 20) return null;
+      const e = validateEvent(raw.event);
+      return e ? { type: "add_event", event: e } : null;
+    }
+    case "remove_event":
+      return typeof raw.id === "string" && (m.events ?? []).some((e) => e.id === raw.id) ? { type: "remove_event", id: raw.id } : null;
+    case "set_seasonality":
+      return Array.isArray(raw.factors) && raw.factors.length === 12 && raw.factors.every((x) => isNum(x) && x >= 0 && x <= 5)
+        ? { type: "set_seasonality", factors: raw.factors as number[] }
+        : null;
+    case "set_start_month":
+      return isNum(raw.month) && raw.month >= 0 && raw.month <= 11 ? { type: "set_start_month", month: Math.round(raw.month) } : null;
+    case "set_founder": {
+      const h = isNum(raw.weeklyHours) && raw.weeklyHours >= 0 && raw.weeklyHours <= 120 ? raw.weeklyHours : undefined;
+      const l = isNum(raw.livingCostsPerMonth) && raw.livingCostsPerMonth >= 0 && raw.livingCostsPerMonth <= 1e6 ? raw.livingCostsPerMonth : undefined;
+      return h !== undefined || l !== undefined ? { type: "set_founder", weeklyHours: h, livingCostsPerMonth: l } : null;
+    }
     default:
       return null;
   }
 }
 
 const FIELD_LABELS: Record<string, string> = {
-  hourlyRate: "tuntihinta",
-  utilization: "laskutusaste",
-  people: "tekijät",
-  hoursPerWeek: "viikkotunnit",
-  demandHoursPerMonth: "myyty kysyntä",
-  salaryPerPersonMonth: "palkka",
-  sideCostRate: "sivukulut",
-  variableCostPerHour: "muuttuva kulu / h",
-  unitsPerMonth: "myynti kpl / kk",
-  unitPrice: "myyntihinta",
-  unitCost: "ostohinta",
-  spoilageRate: "hävikki",
-  stockCoverDays: "varastopäivät",
-  capacityUnitsPerMonth: "kapasiteetti",
-  startingSubscribers: "asiakkaat alussa",
-  newPerMonth: "uudet asiakkaat / kk",
-  churnRateMonthly: "poistuma",
-  pricePerMonth: "kuukausihinta",
-  costPerSubscriberMonth: "kulu / asiakas",
-  cacPerNew: "hankintakulu",
-  visitorsPerDay: "ohikulkijat / pv",
-  conversionRate: "ostoprosentti",
-  averageTicket: "keskiostos",
-  costPerSale: "kulu / myynti",
-  openDaysPerMonth: "aukiolopäivät",
-  capacityPerDay: "palvelukyky / pv",
-  paymentTermsDays: "maksuaika",
-  customerTermsDays: "asiakkaan maksuaika",
-  supplierTermsDays: "toimittajan maksuaika",
-  openingCash: "alkukassa",
+  hourlyRate: msg("tuntihinta"),
+  utilization: msg("laskutusaste"),
+  people: msg("tekijät"),
+  hoursPerWeek: msg("viikkotunnit"),
+  demandHoursPerMonth: msg("myyty kysyntä"),
+  salaryPerPersonMonth: msg("palkka"),
+  sideCostRate: msg("sivukulut"),
+  variableCostPerHour: msg("muuttuva kulu / h"),
+  unitsPerMonth: msg("myynti kpl / kk"),
+  unitPrice: msg("myyntihinta"),
+  unitCost: msg("ostohinta"),
+  spoilageRate: msg("hävikki"),
+  stockCoverDays: msg("varastopäivät"),
+  capacityUnitsPerMonth: msg("kapasiteetti"),
+  startingSubscribers: msg("asiakkaat alussa"),
+  newPerMonth: msg("uudet asiakkaat / kk"),
+  churnRateMonthly: msg("poistuma"),
+  pricePerMonth: msg("kuukausihinta"),
+  costPerSubscriberMonth: msg("kulu / asiakas"),
+  cacPerNew: msg("hankintakulu"),
+  visitorsPerDay: msg("ohikulkijat / pv"),
+  conversionRate: msg("ostoprosentti"),
+  averageTicket: msg("keskiostos"),
+  costPerSale: msg("kulu / myynti"),
+  openDaysPerMonth: msg("aukiolopäivät"),
+  capacityPerDay: msg("palvelukyky / pv"),
+  paymentTermsDays: msg("maksuaika"),
+  customerTermsDays: msg("asiakkaan maksuaika"),
+  supplierTermsDays: msg("toimittajan maksuaika"),
+  openingCash: msg("alkukassa"),
 };
 
 export function fieldLabel(field: string): string {
-  return FIELD_LABELS[field] ?? field;
+  return FIELD_LABELS[field] ? t(FIELD_LABELS[field]) : field;
 }
 
-/** Selkokielinen kuvaus komennosta (näytetään käyttäjälle ennen ja jälkeen muutoksen). */
+/** Selkokielinen kuvaus komennosta (näytetään käyttäjälle muutoksen jälkeen). */
 export function describeCommand(c: FlowCommand, m: Molecule): string {
-  const atomLabel = (id: string) => m.atoms.find((a) => a.id === id)?.label ?? "tulovirta";
+  const atomLabel = (id: string) => m.atoms.find((a) => a.id === id)?.label ?? t("tulovirta");
   switch (c.type) {
     case "set_atom_field":
-      return `${atomLabel(c.atomId)}: ${fieldLabel(c.field)} → ${c.value === null ? "ei rajaa" : Math.round(c.value * 100) / 100}`;
+      return `${atomLabel(c.atomId)}: ${fieldLabel(c.field)} → ${c.value === null ? t("ei rajaa") : Math.round(c.value * 100) / 100}`;
     case "scale_atom_field": {
-      const pct = Math.round((c.factor - 1) * 1000) / 10;
-      return `${atomLabel(c.atomId)}: ${fieldLabel(c.field)} ${pct >= 0 ? "+" : ""}${pct} %`;
+      const p = Math.round((c.factor - 1) * 1000) / 10;
+      return `${atomLabel(c.atomId)}: ${fieldLabel(c.field)} ${p >= 0 ? "+" : ""}${p} %`;
     }
     case "set_credit":
-      return `${fieldLabel(c.field)} → ${c.value}${c.field === "openingCash" ? " €" : " pv"}`;
+      return `${fieldLabel(c.field)} → ${c.value}${c.field === "openingCash" ? " €" : ` ${t("pv")}`}`;
     case "add_atom":
-      return `Uusi tulovirta: ${c.label ?? ATOM_KIND_LABELS[c.kind].title}`;
+      return t("Uusi tulovirta: {label}", { label: c.label ?? t(ATOM_KIND_LABELS[c.kind].title) });
     case "remove_atom":
-      return `Poista tulovirta: ${atomLabel(c.atomId)}`;
+      return t("Poista tulovirta: {label}", { label: atomLabel(c.atomId) });
     case "add_fixed_cost":
-      return `Uusi kiinteä kulu: ${c.label} ${Math.round(c.amountPerMonth)} € / kk`;
+      return t("Uusi kiinteä kulu: {label} {amount} € / kk", { label: c.label, amount: Math.round(c.amountPerMonth) });
     case "remove_fixed_cost":
-      return `Poista kulu: ${m.fixedCosts.find((f) => f.id === c.id)?.label ?? "kulu"}`;
+      return t("Poista kulu: {label}", { label: m.fixedCosts.find((f) => f.id === c.id)?.label ?? t("kulu") });
     case "checklist":
-      return `Perustamislista: ${CHECKLIST.find((d) => d.id === c.id)?.title ?? c.id} ${c.checked ? "✓" : "✗"}`;
+      return t("Perustamislista: {title}", { title: t(CHECKLIST.find((d) => d.id === c.id)?.title ?? c.id) }) + (c.checked ? " ✓" : " ✗");
     case "open_panel":
-      return "Avaa paneeli";
+      return t("Avaa paneeli");
     case "stress":
-      return "Stressitesti";
+      return t("Stressitesti");
+    case "set_name":
+      return t("Yrityksen nimi: {name}", { name: c.name });
+    case "add_event":
+      return t("Uusi tapahtuma: {title}", { title: c.event.title });
+    case "remove_event":
+      return t("Poista tapahtuma: {title}", { title: (m.events ?? []).find((e) => e.id === c.id)?.title ?? "" });
+    case "set_seasonality":
+      return t("Kausivaihtelu päivitetty");
+    case "set_start_month":
+      return t("Aloituskuukausi päivitetty");
+    case "set_founder":
+      return t("Yrittäjän tiedot päivitetty");
   }
 }
 
@@ -176,12 +262,20 @@ export interface CommandResult {
   stress: StressInput | null;
   applied: string[];
   rejected: number;
-  /** Muuttuiko mallin rakenne (atomit lisätty/poistettu) – käyttöliittymä piirtää vivut uudelleen. */
+  /** Muuttuiko mallin rakenne – käyttöliittymä piirtää vivut uudelleen. */
   structural: boolean;
 }
 
+export interface ApplyOptions {
+  source?: ProvenanceSource;
+  note?: string;
+  url?: string;
+}
+
 /** Validoi ja soveltaa komennot järjestyksessä. Kelvottomat komennot ohitetaan. */
-export function applyCommands(m: Molecule, cl: ChecklistState, raw: unknown[]): CommandResult {
+export function applyCommands(m: Molecule, cl: ChecklistState, raw: unknown[], opts: ApplyOptions = {}): CommandResult {
+  const source = opts.source ?? "coach";
+  const prov = { note: opts.note, url: opts.url };
   let molecule = m;
   let checklist = cl;
   let openPanel: PanelId | null = null;
@@ -189,44 +283,56 @@ export function applyCommands(m: Molecule, cl: ChecklistState, raw: unknown[]): 
   const applied: string[] = [];
   let rejected = 0;
   let structural = false;
-  for (const r of raw.slice(0, 12)) {
+  for (const r of raw.slice(0, 20)) {
     const c = validateCommand(r, molecule);
     if (!c) {
       rejected += 1;
       continue;
     }
     const before = molecule;
-    applied.push(describeCommand(c, molecule));
+    const description = describeCommand(c, molecule);
+    let silent = false;
     switch (c.type) {
       case "set_atom_field":
-        molecule = setAtomField(molecule, c.atomId, c.field, c.value);
+        molecule = withProvenance(setAtomField(molecule, c.atomId, c.field, c.value), [provKey(c.atomId, c.field)], source, prov);
         break;
       case "scale_atom_field": {
         const atom = molecule.atoms.find((a) => a.id === c.atomId) as unknown as Record<string, unknown> | undefined;
         const cur = atom?.[c.field];
         if (typeof cur === "number") {
           const next = c.field === "people" ? Math.max(1, Math.round(cur * c.factor)) : cur * c.factor;
-          molecule = setAtomField(molecule, c.atomId, c.field, next);
+          molecule = withProvenance(setAtomField(molecule, c.atomId, c.field, next), [provKey(c.atomId, c.field)], source, prov);
         }
         break;
       }
       case "set_credit":
-        molecule = { ...molecule, credit: { ...molecule.credit, [c.field]: c.value } };
+        molecule = withProvenance({ ...molecule, credit: { ...molecule.credit, [c.field]: c.value } }, [provKey("credit", c.field)], source, prov);
         structural = true;
         break;
       case "add_atom": {
         molecule = addAtom(molecule, c.kind, c.label);
         const added = molecule.atoms[molecule.atoms.length - 1];
-        for (const [k, v] of Object.entries(c.params ?? {})) molecule = setAtomField(molecule, added.id, k, v);
+        const keys: string[] = [];
+        for (const [k, v] of Object.entries(c.params ?? {})) {
+          molecule = setAtomField(molecule, added.id, k, v);
+          keys.push(provKey(added.id, k));
+        }
+        molecule = withProvenance(molecule, keys, source, prov);
         structural = true;
         break;
       }
       case "remove_atom":
-        molecule = removeAtom(molecule, c.atomId);
+        molecule = pruneProvenance(removeAtom(molecule, c.atomId));
         structural = true;
         break;
       case "add_fixed_cost":
-        molecule = addFixedCost(molecule, { label: c.label, amountPerMonth: c.amountPerMonth, dayOfMonth: c.dayOfMonth, category: c.category, source: "coach" });
+        molecule = addFixedCost(molecule, {
+          label: c.label,
+          amountPerMonth: c.amountPerMonth,
+          dayOfMonth: c.dayOfMonth,
+          category: c.category,
+          source: source === "import" ? "import" : source === "launchpad" ? "launchpad" : "coach",
+        });
         break;
       case "remove_fixed_cost":
         molecule = removeFixedCost(molecule, c.id);
@@ -240,15 +346,40 @@ export function applyCommands(m: Molecule, cl: ChecklistState, raw: unknown[]): 
       }
       case "open_panel":
         openPanel = c.panel;
-        applied.pop();
+        silent = true;
         break;
       case "stress":
         stress = c.stress;
         openPanel = "cash";
-        applied.pop();
+        silent = true;
         break;
+      case "set_name":
+        molecule = renameMolecule(molecule, c.name);
+        break;
+      case "add_event":
+        molecule = { ...molecule, events: [...(molecule.events ?? []), { id: newId("ev"), ...c.event }] };
+        break;
+      case "remove_event":
+        molecule = { ...molecule, events: (molecule.events ?? []).filter((e) => e.id !== c.id) };
+        break;
+      case "set_seasonality":
+        molecule = { ...molecule, seasonality: [...c.factors] };
+        break;
+      case "set_start_month":
+        molecule = { ...molecule, startMonth: c.month };
+        break;
+      case "set_founder": {
+        const f = molecule.founder ?? { weeklyHours: 40, livingCostsPerMonth: 1800 };
+        molecule = {
+          ...molecule,
+          founder: { weeklyHours: c.weeklyHours ?? f.weeklyHours, livingCostsPerMonth: c.livingCostsPerMonth ?? f.livingCostsPerMonth },
+        };
+        break;
+      }
     }
-    if (molecule === before && c.type !== "open_panel" && c.type !== "stress" && c.type !== "checklist") applied.pop();
+    if (silent) continue;
+    if (molecule === before && c.type !== "checklist") continue;
+    applied.push(description);
   }
   return { molecule, checklist, openPanel, stress, applied, rejected, structural };
 }

@@ -132,6 +132,41 @@ export interface FixedCost {
   source: FixedCostSource;
 }
 
+/**
+ * Ulkoinen tapahtuma tai kriisi, joka muuttaa simulaatiota määräajan.
+ * Muutokset ovat suhteellisia (−0.3 = −30 %). Kertakulu maksetaan alkukuukauden 1. päivänä.
+ */
+export interface BusinessEvent {
+  id: string;
+  title: string;
+  /** Kirjaston tunniste, jos tapahtuma on lisätty valmiista kortista. */
+  libraryId?: string;
+  /** Simulaatiokuukausi, jolloin tapahtuma alkaa (0 = ensimmäinen). */
+  startMonth: number;
+  durationMonths: number;
+  volumeChange?: number;
+  priceChange?: number;
+  variableCostChange?: number;
+  fixedCostChange?: number;
+  oneOffCost?: number;
+}
+
+/** Yrittäjän oma tilanne. Ei vaikuta laskentaan, vain yrittäjän näkymään ja valmentajaan. */
+export interface FounderState {
+  weeklyHours: number;
+  livingCostsPerMonth: number;
+}
+
+export type ProvenanceSource = "user" | "preset" | "import" | "coach" | "market" | "launchpad" | "genesis" | "widget";
+
+/** Luvun alkuperä: mistä arvo on peräisin (näytetään vipujen vieressä ja raportissa). */
+export interface Provenance {
+  source: ProvenanceSource;
+  note?: string;
+  url?: string;
+  at: number;
+}
+
 export interface Molecule {
   id: string;
   name: string;
@@ -141,6 +176,14 @@ export interface Molecule {
   /** Palkanmaksupäivä aika-atomien palkoille, 1..30. */
   payrollDay: number;
   horizonMonths: number;
+  /** Kysynnän kausikertoimet kalenterikuukausittain (12 kpl, 1 = tavallinen). */
+  seasonality?: number[];
+  /** Kalenterikuukausi, josta simulaatio alkaa (0 = tammikuu). */
+  startMonth?: number;
+  events?: BusinessEvent[];
+  founder?: FounderState;
+  /** Lukujen alkuperä avaimella `atomId:kenttä` tai `credit:kenttä`. */
+  provenance?: Record<string, Provenance>;
 }
 
 /** Atomin staattinen kuukausitalous (ensimmäisen kuukauden tasolla). */
@@ -150,7 +193,7 @@ export interface AtomEconomics {
   label: string;
   /** Myyty määrä kuukaudessa. */
   volume: number;
-  /** Määrän yksikkö suomeksi: "h", "kpl", "asiakasta", "myyntiä". */
+  /** Määrän yksikkö käännösavaimena: "h", "kpl", "asiakasta", "myyntiä" (näytetään `t(volumeUnit)`). */
   volumeUnit: string;
   /** Kysyntä kuukaudessa (sama yksikkö). */
   demand: number;
@@ -192,6 +235,12 @@ export interface AtomMonthStats {
 
 export interface MonthResult {
   month: number;
+  /** Kalenterikuukausi 0..11. */
+  calendarMonth: number;
+  /** Kauden kerroin tälle kuukaudelle. */
+  seasonFactor: number;
+  /** Tällä kuukaudella vaikuttavat tapahtumat (otsikot). */
+  activeEvents: string[];
   revenue: number;
   variableCosts: number;
   grossMargin: number;

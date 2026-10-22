@@ -1,5 +1,5 @@
 /**
- * APEX Flow — sivupohja ja tyylit (`src/flow/server/page.ts`).
+ * APEX Studio — sivupohja ja tyylit (`src/flow/server/page.ts`).
  */
 
 export const FLOW_CSS = `
@@ -212,6 +212,112 @@ input{font:inherit;color:inherit}
 .im-label{flex:1;display:flex;flex-direction:column}
 .im-label em{font-style:normal;font-size:12px;color:var(--muted)}
 .im-label em.im-dup{color:#fcd34d}
+.fl-lang{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.fl-lang-btn{background:transparent;border:0;padding:5px 9px;font-size:12px;color:var(--muted)}
+.fl-lang-btn[aria-pressed="true"]{background:#0e7490;color:#fff}
+.fl-menu{position:relative}
+.fl-menu>summary{list-style:none;cursor:pointer}
+.fl-menu>summary::-webkit-details-marker{display:none}
+.fl-menu-body{position:absolute;right:0;top:calc(100% + 6px);background:#0f172a;border:1px solid var(--line);border-radius:12px;padding:6px;display:flex;flex-direction:column;min-width:220px;z-index:15;box-shadow:0 10px 30px rgba(0,0,0,.4)}
+.fl-toolbar .fl-menu-body{left:0;right:auto}
+.fl-menu-body a,.fl-menu-body button{display:block;text-align:left;background:transparent;border:0;color:var(--text);padding:8px 10px;border-radius:8px;text-decoration:none;font-size:14px}
+.fl-menu-body a:hover,.fl-menu-body button:hover{background:var(--panel2)}
+.fl-toolbar{display:flex;gap:6px;flex-wrap:wrap;padding:8px 20px;border-bottom:1px solid var(--line);background:#0c1424}
+.fl-tool{background:transparent;border:1px solid transparent;border-radius:999px;padding:5px 12px;font-size:13.5px;color:#cbd5e1}
+.fl-tool:hover{border-color:var(--line);background:var(--panel)}
+.fl-goals{display:flex;gap:6px;flex-wrap:wrap}
+.fl-goal{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12.5px}
+.fl-goal.ok{border-color:#065f46;color:#6ee7b7}
+.fl-goal.bad{border-color:#7f1d1d;color:#fca5a5}
+.fl-subheader[hidden]{display:none}
+.pv{font-size:9px;vertical-align:middle;margin-left:2px;cursor:help}
+.pv-preset{color:#475569}.pv-user{color:#38bdf8}.pv-coach{color:#a78bfa}.pv-import{color:#fbbf24}.pv-market{color:#34d399}.pv-launchpad{color:#f472b6}.pv-genesis{color:#c084fc}.pv-widget{color:#fb923c}
+.pv-legend{margin-top:10px;line-height:1.8}
+.fd-dim{color:var(--muted);font-size:12px;font-style:normal}
+.warn{color:#fcd34d}
+.fl-drawer.wide{width:min(760px,100vw)}
+.tl-event{fill:rgba(251,191,36,.10)}
+.tl-event-label{fill:#fbbf24;font-size:10px}
+.tl-overlay{fill:none;stroke-width:2;stroke-dasharray:6 4;vector-effect:non-scaling-stroke;opacity:.9}
+.tl-legend{display:inline-flex;gap:12px;margin-left:14px}
+.tl-legend i,.wg-legend i{display:inline-block;width:10px;height:3px;margin-right:4px;vertical-align:middle}
+.wg-strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.wg-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.wg-card.kind-chart,.wg-card.kind-table{grid-column:span 2}
+@media (max-width:700px){.wg-card.kind-chart,.wg-card.kind-table{grid-column:auto}}
+.wg-card.active{border-color:var(--warn)}
+.wg-head{display:flex;align-items:center;gap:6px}
+.wg-title{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wg-ai{font-size:12px}
+.wg-x{background:none;border:0;color:#475569;font-size:12px;padding:0 2px}
+.wg-x:hover{color:#f87171}
+.wg-value{font-size:22px;font-weight:700}
+.wg-alert{font-size:13.5px;border-radius:8px;padding:6px 8px;background:#3b2f12;color:#fde68a}
+.wg-alert.sev-alert{background:#3f1515;color:#fecaca}
+.wg-alert.sev-info{background:#10233f;color:#bae6fd}
+.wg-ok{font-size:13px;color:#6ee7b7}
+.wg-error{font-size:12.5px;color:#fca5a5}
+.wg-chart{width:100%;height:90px;display:block}
+.wg-range,.wg-legend{display:flex;justify-content:space-between;gap:10px;font-size:11px;color:var(--muted)}
+.wg-table{width:100%;font-size:13px;border-collapse:collapse}
+.wg-table td{padding:3px 0;border-bottom:1px solid #1b2742}
+.wg-table td:last-child{text-align:right;font-weight:600}
+.wg-card input[type=range]{width:100%;accent-color:var(--accent)}
+.wg-tpls{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin:8px 0}
+.wg-tpl{display:flex;flex-direction:column;gap:2px;text-align:left;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.wg-tpl:hover{border-color:var(--accent)}
+.wg-tpl span{font-size:12px;color:var(--muted)}
+.wg-row{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #1b2742}
+.wg-row-main{flex:1;min-width:0}
+.wg-row-title{font-weight:600}
+.wg-formula{width:100%;margin-top:4px;background:#0b1324;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font:12.5px ui-monospace,Menlo,monospace;color:#cbd5e1}
+.wg-switch{position:relative;display:inline-block;width:36px;height:20px;flex:none;margin-top:2px}
+.wg-switch input{opacity:0;width:0;height:0}
+.wg-switch span{position:absolute;inset:0;background:#334155;border-radius:999px;transition:background .15s}
+.wg-switch span::after{content:"";position:absolute;width:14px;height:14px;left:3px;top:3px;background:#fff;border-radius:50%;transition:transform .15s}
+.wg-switch input:checked+span{background:var(--ok)}
+.wg-switch input:checked+span::after{transform:translateX(16px)}
+.wg-vocab{font-size:12.5px;columns:2;padding-left:16px}
+.wg-vocab code{color:#7dd3fc}
+.sc-list{display:flex;flex-direction:column;margin-top:10px}
+.sc-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid #1b2742}
+.sc-actions{margin-left:auto;display:flex;gap:6px;align-items:center}
+.sc-row>.fd-icon-btn{margin-left:auto}
+.sc-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.ss-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:4px;margin:10px 0;align-items:end}
+.ss-col{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px;color:var(--muted)}
+.ss-bar{width:100%;background:linear-gradient(180deg,#38bdf8,#0369a1);border-radius:4px 4px 0 0;min-height:2px}
+.ss-col .fd-input input{width:100%;padding:3px 2px;text-align:center;font-size:12px}
+.cr-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px}
+.cr-card{display:flex;flex-direction:column;gap:4px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px}
+.cr-card span{font-size:12.5px;color:#cbd5e1}
+.cr-card em{font-style:normal;font-size:12px;color:#fbbf24}
+.cr-card .fd-chip{align-self:flex-start}
+.tk-list{display:flex;flex-direction:column;gap:10px}
+.tk-card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.tk-card.active{border-color:var(--accent)}
+.tk-card p{margin:4px 0;font-size:13.5px}
+.tk-head{display:flex;gap:8px;align-items:center}
+.tk-banner{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:#10233f;border:1px solid #1d4ed8;border-radius:12px;padding:8px 12px;font-size:13.5px}
+.tk-banner.done{background:#052e1f;border-color:#10b981}
+.tk-progress{color:var(--muted)}
+.ad-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+.ad-card{background:var(--panel2);border:1px solid var(--line);border-left:4px solid var(--ok);border-radius:12px;padding:10px 12px}
+.ad-card.stance-concern{border-left-color:var(--warn)}
+.ad-card.stance-alarm{border-left-color:var(--alert)}
+.ad-head{display:flex;gap:8px;align-items:center;margin-bottom:4px}
+.ad-head b{flex:1}
+.mk-row{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:8px 0}
+.mk-row a,.rp-preview a,.fd-list a{color:#7dd3fc}
+.rp-preview h2{font-size:20px;margin:10px 0}
+.rp-preview h3{font-size:16px;margin:18px 0 6px;color:var(--accent2)}
+.rp-preview h4{font-size:14px;margin:12px 0 4px}
+.rp-preview ul{padding-left:18px;font-size:13.5px}
+.rp-preview p{font-size:13.5px}
+.ob-idea{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font:inherit;font-size:16px;color:var(--text);resize:vertical}
+.ob-idea:focus{outline:none;border-color:var(--accent)}
+.ob-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.ob-start.secondary{background:transparent;border:1px solid var(--accent);color:var(--accent)}
 .ob-main{max-width:860px;margin:0 auto;padding:36px 20px 60px}
 .ob-main h1{font-size:30px;margin:0 0 6px}
 .ob-main h2{font-size:17px;margin:38px 0 10px;color:var(--muted)}
@@ -240,12 +346,12 @@ export function renderFlowPage(): string {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="icon" href="data:," />
-  <title>APEX Flow — yrityksesi rahavirrat elävänä</title>
+  <title>APEX Studio</title>
   <style>${FLOW_CSS}</style>
 </head>
 <body>
-  <div id="flow-root"><p style="padding:40px;color:#94a3b8">Ladataan APEX Flow'ta…</p></div>
-  <noscript><p style="padding:40px">APEX Flow vaatii JavaScriptin.</p></noscript>
+  <div id="flow-root"><p style="padding:40px;color:#94a3b8">APEX Studio…</p></div>
+  <noscript><p style="padding:40px">APEX Studio vaatii JavaScriptin. / APEX Studio requires JavaScript.</p></noscript>
   <script type="module" src="/flow/client/app.ts"></script>
 </body>
 </html>`;

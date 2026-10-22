@@ -6,4 +6,5 @@ export * from "./types.ts";
 export * from "./atoms.ts";
 export * from "./simulate.ts";
 export * from "./sensitivity.ts";
+export * from "./events.ts";
 export * from "./presets.ts";

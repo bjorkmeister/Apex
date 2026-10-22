@@ -5,32 +5,31 @@
  * - myynti kirjataan saamiseksi ja raha saapuu kassaan maksuajan päästä,
  * - muuttuvat kulut kirjataan ostoveloiksi ja maksetaan toimittajan maksuajan päästä,
  * - kiinteät kulut ja palkat maksetaan omana maksupäivänään,
- * - fyysinen aloitusvarasto ostetaan päivänä 0 (raha sitoutuu varastoon).
+ * - fyysinen aloitusvarasto ostetaan päivänä 0 (raha sitoutuu varastoon),
+ * - kausivaihtelu ja tapahtumat muuttavat kunkin kuukauden lukuja (events.ts).
  *
  * Simulaatio on deterministinen: samasta molekyylistä tulee aina sama tulos.
  */
 import type {
+  AtomEconomics,
   AtomMonthStats,
   DayPoint,
+  FixedCost,
   Molecule,
   MonthResult,
   PhysicalMatterAtom,
   RecurringSubAtom,
   SimulationResult,
   TimeCapacityAtom,
-  TransactionalTradeAtom,
 } from "./types.ts";
 import { DAYS_PER_MONTH } from "./types.ts";
-import {
-  atomEconomics,
-  physicalOpeningInventory,
-  resolvePaymentTerms,
-  subscribersAtMonth,
-  timePayrollPerMonth,
-} from "./atoms.ts";
+import { atomEconomics, physicalOpeningInventory, resolvePaymentTerms, timePayrollPerMonth } from "./atoms.ts";
+import { applyStress } from "./stress.ts";
+import { monthModifier } from "./events.ts";
 
 const clampDay = (d: number): number => Math.min(DAYS_PER_MONTH, Math.max(1, Math.round(d || 1)));
 const nonNeg = (n: number): number => (Number.isFinite(n) && n > 0 ? n : 0);
+const clamp01 = (n: number): number => Math.min(1, Math.max(0, Number.isFinite(n) ? n : 0));
 
 class Schedule {
   private readonly amounts: number[] = [];
@@ -58,12 +57,7 @@ export function simulate(molecule: Molecule, options: SimulateOptions = {}): Sim
   const payrollDay = clampDay(molecule.payrollDay);
 
   const active = molecule.atoms.filter((a) => a.enabled);
-  const timeAtoms = active.filter((a): a is TimeCapacityAtom => a.kind === "TIME_CAPACITY");
   const physAtoms = active.filter((a): a is PhysicalMatterAtom => a.kind === "PHYSICAL_MATTER");
-  const subAtoms = active.filter((a): a is RecurringSubAtom => a.kind === "RECURRING_SUB");
-  const tradeAtoms = active.filter((a): a is TransactionalTradeAtom => a.kind === "TRANSACTIONAL_TRADE");
-
-  const econ = new Map(active.map((a) => [a.id, atomEconomics(a, molecule)]));
   const terms = new Map(active.map((a) => [a.id, resolvePaymentTerms(a, molecule)]));
 
   const receipts = new Schedule();
@@ -83,14 +77,12 @@ export function simulate(molecule: Molecule, options: SimulateOptions = {}): Sim
   let mByAtom: Record<string, AtomMonthStats> = {};
   const totals = { revenue: 0, variableCosts: 0, fixedCosts: 0, operatingProfit: 0 };
 
-  const resetMonth = (): void => {
-    mRevenue = 0;
-    mVariable = 0;
-    mFixed = 0;
-    mByAtom = {};
-    for (const a of active) mByAtom[a.id] = { revenue: 0, variableCosts: 0, volume: 0 };
-  };
-  resetMonth();
+  // Kuukauden tila (päivitetään kunkin kuukauden alussa).
+  let econ = new Map<string, AtomEconomics>();
+  let monthFixedCosts: FixedCost[] = molecule.fixedCosts;
+  let monthTimeAtoms: TimeCapacityAtom[] = [];
+  let monthMeta = { calendarMonth: 0, seasonFactor: 1, activeEvents: [] as string[] };
+  const subscribers = new Map<string, number>();
 
   const sell = (atomId: string, day: number, amount: number): void => {
     if (amount <= 0) return;
@@ -116,6 +108,41 @@ export function simulate(molecule: Molecule, options: SimulateOptions = {}): Sim
     mFixed += amount;
   };
 
+  const startMonth = (month: number, day: number): void => {
+    mRevenue = 0;
+    mVariable = 0;
+    mFixed = 0;
+    mByAtom = {};
+    for (const a of active) mByAtom[a.id] = { revenue: 0, variableCosts: 0, volume: 0 };
+    const mod = monthModifier(molecule, month);
+    const monthMol = applyStress(molecule, mod.stress);
+    const monthActive = monthMol.atoms.filter((a) => a.enabled);
+    econ = new Map(monthActive.map((a) => [a.id, atomEconomics(a, monthMol)]));
+    monthFixedCosts = monthMol.fixedCosts;
+    monthTimeAtoms = monthActive.filter((a): a is TimeCapacityAtom => a.kind === "TIME_CAPACITY");
+    monthMeta = { calendarMonth: mod.calendarMonth, seasonFactor: mod.seasonFactor, activeEvents: mod.activeEvents.map((e) => e.title) };
+
+    // Tapahtumien kertakulut.
+    payFixedNow(mod.oneOffCost);
+
+    // Tilaukset laskutetaan kuun alussa, uusien asiakkaiden hankinta maksetaan heti.
+    for (const a of monthActive) {
+      if (a.kind !== "RECURRING_SUB") continue;
+      const base = molecule.atoms.find((b) => b.id === a.id) as RecurringSubAtom;
+      const add = nonNeg(a.newPerMonth);
+      const prev = subscribers.get(a.id);
+      const subs = prev === undefined ? nonNeg(base.startingSubscribers) + add : prev * (1 - clamp01(a.churnRateMonthly)) + add;
+      subscribers.set(a.id, subs);
+      mByAtom[a.id].volume = subs;
+      sell(a.id, day, subs * nonNeg(a.pricePerMonth));
+      variableCost(a.id, day, subs * nonNeg(a.costPerSubscriberMonth));
+      const cac = add * nonNeg(a.cacPerNew);
+      cash -= cac;
+      mVariable += cac;
+      mByAtom[a.id].variableCosts += cac;
+    }
+  };
+
   // Päivä 0: fyysinen aloitusvarasto ostetaan toimittajan maksuehdoilla.
   for (const a of physAtoms) {
     const stock = physicalOpeningInventory(a);
@@ -131,48 +158,29 @@ export function simulate(molecule: Molecule, options: SimulateOptions = {}): Sim
     const dom = (d % DAYS_PER_MONTH) + 1;
     const month = Math.floor(d / DAYS_PER_MONTH);
 
-    // Kuukauden alku: tilaukset laskutetaan, uusien asiakkaiden hankinta maksetaan.
-    if (dom === 1) {
-      for (const a of subAtoms) {
-        const subs = subscribersAtMonth(a, month);
-        mByAtom[a.id].volume = subs;
-        sell(a.id, d, subs * nonNeg(a.pricePerMonth));
-        variableCost(a.id, d, subs * nonNeg(a.costPerSubscriberMonth));
-        const cac = nonNeg(a.newPerMonth) * nonNeg(a.cacPerNew);
-        cash -= cac;
-        mVariable += cac;
-        mByAtom[a.id].variableCosts += cac;
-      }
-    }
+    if (dom === 1) startMonth(month, d);
 
     // Päivittäinen myynti: fyysinen tavara ja tiskikauppa.
-    for (const a of physAtoms) {
-      const e = econ.get(a.id)!;
-      const unitsToday = e.volume / DAYS_PER_MONTH;
-      mByAtom[a.id].volume += unitsToday;
-      sell(a.id, d, unitsToday * e.unitPrice);
-      variableCost(a.id, d, unitsToday * e.unitVariableCost);
-    }
-    for (const a of tradeAtoms) {
-      const e = econ.get(a.id)!;
-      const salesToday = e.volume / DAYS_PER_MONTH;
-      mByAtom[a.id].volume += salesToday;
-      sell(a.id, d, salesToday * e.unitPrice);
-      variableCost(a.id, d, salesToday * e.unitVariableCost);
+    for (const [id, e] of econ) {
+      if (e.kind !== "PHYSICAL_MATTER" && e.kind !== "TRANSACTIONAL_TRADE") continue;
+      const perDay = e.volume / DAYS_PER_MONTH;
+      mByAtom[id].volume += perDay;
+      sell(id, d, perDay * e.unitPrice);
+      variableCost(id, d, perDay * e.unitVariableCost);
     }
 
     // Kiinteät kulut omana maksupäivänään.
-    for (const c of molecule.fixedCosts) {
+    for (const c of monthFixedCosts) {
       if (clampDay(c.dayOfMonth) === dom) payFixedNow(nonNeg(c.amountPerMonth));
     }
     // Palkat.
     if (dom === payrollDay) {
-      for (const a of timeAtoms) payFixedNow(timePayrollPerMonth(a));
+      for (const a of monthTimeAtoms) payFixedNow(timePayrollPerMonth(a));
     }
 
     // Kuukauden lopussa aika-atomit laskuttavat tehdyt tunnit.
     if (dom === DAYS_PER_MONTH) {
-      for (const a of timeAtoms) {
+      for (const a of monthTimeAtoms) {
         const e = econ.get(a.id)!;
         mByAtom[a.id].volume = e.volume;
         sell(a.id, d, e.revenuePerMonth);
@@ -200,6 +208,9 @@ export function simulate(molecule: Molecule, options: SimulateOptions = {}): Sim
       const operatingProfit = grossMargin - mFixed;
       monthResults.push({
         month,
+        calendarMonth: monthMeta.calendarMonth,
+        seasonFactor: monthMeta.seasonFactor,
+        activeEvents: monthMeta.activeEvents,
         revenue: mRevenue,
         variableCosts: mVariable,
         grossMargin,
@@ -215,7 +226,6 @@ export function simulate(molecule: Molecule, options: SimulateOptions = {}): Sim
       totals.variableCosts += mVariable;
       totals.fixedCosts += mFixed;
       totals.operatingProfit += operatingProfit;
-      resetMonth();
     }
   }
 

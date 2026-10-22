@@ -15,6 +15,7 @@ import type {
   TransactionalTradeAtom,
 } from "./types.ts";
 import { DAYS_PER_MONTH, WEEKS_PER_MONTH } from "./types.ts";
+import { msg } from "../i18n/index.ts";
 
 const nonNeg = (n: number): number => (Number.isFinite(n) && n > 0 ? n : 0);
 const clamp01 = (n: number): number => Math.min(1, Math.max(0, Number.isFinite(n) ? n : 0));
@@ -54,7 +55,7 @@ function timeEconomics(atom: TimeCapacityAtom, terms: number): AtomEconomics {
   return finish(atom, terms, {
     demandAssumed: atom.demandHoursPerMonth === null,
     volume,
-    volumeUnit: "h",
+    volumeUnit: msg("h"),
     demand,
     capacity,
     unitPrice: price,
@@ -75,7 +76,7 @@ function physicalEconomics(atom: PhysicalMatterAtom, terms: number): AtomEconomi
   const volume = capacity === null ? demand : Math.min(capacity, demand);
   return finish(atom, terms, {
     volume,
-    volumeUnit: "kpl",
+    volumeUnit: msg("kpl"),
     demand,
     capacity,
     unitPrice: nonNeg(atom.unitPrice),
@@ -106,7 +107,7 @@ function subEconomics(atom: RecurringSubAtom, terms: number): AtomEconomics {
   const subs = subscribersAtMonth(atom, 0);
   return finish(atom, terms, {
     volume: subs,
-    volumeUnit: "asiakasta",
+    volumeUnit: msg("asiakasta"),
     demand: subs,
     capacity: null,
     unitPrice: nonNeg(atom.pricePerMonth),
@@ -127,7 +128,7 @@ function tradeEconomics(atom: TransactionalTradeAtom, terms: number): AtomEconom
   const volume = capacity === null ? demand : Math.min(capacity, demand);
   return finish(atom, terms, {
     volume,
-    volumeUnit: "myyntiä",
+    volumeUnit: msg("myyntiä"),
     demand,
     capacity,
     unitPrice: nonNeg(atom.averageTicket),

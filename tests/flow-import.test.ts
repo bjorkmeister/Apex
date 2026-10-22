@@ -68,7 +68,7 @@ describe("APEX Flow — tiliotteen tuonti", () => {
   it("4. Hyväksytyt ehdotukset muuttuvat validoiduiksi komennoiksi ja malli täsmää", () => {
     const m = createPreset("it_consultant");
     const a = analyzeStatement(parseStatementCsv(OP_CSV).transactions);
-    const cmds = importCommands(m, a, { costKeys: a.recurring.map((r) => r.key), calibrateRevenue: true, useBalance: false });
+    const cmds = importCommands(m, a, { costKeys: a.recurring.map((r) => r.key), calibrateRevenue: true, useBalance: false, saveActuals: false });
     const r = applyCommands(m, emptyChecklist(), cmds);
     assert.equal(r.rejected, 0);
     assert.ok(totalFixedCostsPerMonth(r.molecule) > totalFixedCostsPerMonth(m));

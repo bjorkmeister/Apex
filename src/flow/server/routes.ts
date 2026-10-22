@@ -1,7 +1,9 @@
 /**
  * APEX Flow — HTTP-reitit (`src/flow/server/routes.ts`).
  *
- * - `GET /flow` palauttaa sivun.
+ * - `GET /` palauttaa APEX Studion (vanha `/flow` ohjataan tänne, War Room on `/classic`).
+ * - `GET /api/flow/status` kertoo, onko kielimalli kytketty.
+ * - `POST /api/flow/{chat,genesis,widget,advisors,market}` kielimallia käyttävät toiminnot.
  * - `GET /flow/{kernel|model|client}/<tiedosto>.ts` palauttaa saman TypeScript-lähdekoodin
  *   selaimelle JavaScriptinä (tyypit riisutaan Node.js:n `stripTypeScriptTypes`-funktiolla).
  *   Näin selain ja testit ajavat täsmälleen samaa laskentakoodia.
@@ -13,10 +15,13 @@ import * as nodeModule from "node:module";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { renderFlowPage } from "./page.ts";
 import { handleChat } from "./chat.ts";
+import { handleAdvisors, handleGenesis, handleMarket, handleWidget, llmStatus } from "./ai.ts";
 
 const FLOW_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const ALLOWED_DIRS = new Set(["kernel", "model", "client"]);
+const ALLOWED_DIRS = new Set(["kernel", "model", "client", "i18n"]);
 const FILE_RE = /^[a-z0-9-]+\.ts$/;
+/** Selaimen moduulipolku: /flow/<hakemisto>/<tiedosto>.ts */
+export const MODULE_PATH_RE = /^\/flow\/([a-z0-9]+)\/([^/]+)$/;
 
 type StripFn = (code: string, opts?: { mode?: "strip" | "transform" }) => string;
 const strip = (nodeModule as unknown as { stripTypeScriptTypes?: StripFn }).stripTypeScriptTypes;
@@ -39,17 +44,28 @@ export function transpileFlowModule(dir: string, file: string): string | null {
 
 /** Käsittelee APEX Flow -pyynnön. Palauttaa `true`, jos pyyntö käsiteltiin. */
 export function handleFlowRequest(req: IncomingMessage, res: ServerResponse, pathname: string): boolean {
-  if (req.method === "POST" && pathname === "/api/flow/chat") {
-    void handleChatRequest(req, res);
+  const post = POST_HANDLERS[pathname];
+  if (req.method === "POST" && post) {
+    void handlePost(req, res, post);
     return true;
   }
   if (req.method !== "GET") return false;
+  if (pathname === "/api/flow/status") {
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(llmStatus()));
+    return true;
+  }
   if (pathname === "/flow" || pathname === "/flow/") {
+    res.writeHead(302, { Location: "/" });
+    res.end();
+    return true;
+  }
+  if (pathname === "/" || pathname === "/studio") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
     res.end(renderFlowPage());
     return true;
   }
-  const m = /^\/flow\/([a-z]+)\/([^/]+)$/.exec(pathname);
+  const m = MODULE_PATH_RE.exec(pathname);
   if (!m) return false;
   try {
     const js = transpileFlowModule(m[1], m[2]);
@@ -69,7 +85,15 @@ export function handleFlowRequest(req: IncomingMessage, res: ServerResponse, pat
 
 const MAX_BODY = 256 * 1024;
 
-async function handleChatRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+const POST_HANDLERS: Record<string, (body: unknown) => Promise<unknown>> = {
+  "/api/flow/chat": handleChat,
+  "/api/flow/genesis": handleGenesis,
+  "/api/flow/widget": handleWidget,
+  "/api/flow/advisors": handleAdvisors,
+  "/api/flow/market": handleMarket,
+};
+
+async function handlePost(req: IncomingMessage, res: ServerResponse, handler: (body: unknown) => Promise<unknown>): Promise<void> {
   try {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -84,7 +108,7 @@ async function handleChatRequest(req: IncomingMessage, res: ServerResponse): Pro
       chunks.push(b);
     }
     const body = JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}");
-    const out = await handleChat(body);
+    const out = await handler(body);
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(out));
   } catch (err) {

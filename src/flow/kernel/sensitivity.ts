@@ -5,9 +5,12 @@
  * Se laskee täsmällisesti, kuinka paljon määrää saa menettää (tai pitää saada lisää),
  * jotta tulos pysyy ennallaan. Arvion siitä, onko se realistista, tekee käyttäjä.
  */
-import type { AtomEconomics, Molecule, RevenueAtom, SimulationResult, TimeCapacityAtom } from "./types.ts";
+import type { AtomEconomics, Molecule, SimulationResult, TimeCapacityAtom } from "./types.ts";
 import { moleculeEconomics, timeCapacityHours, totalFixedCostsPerMonth } from "./atoms.ts";
 import { simulate } from "./simulate.ts";
+import { applyStress, type StressInput } from "./stress.ts";
+
+export { applyStress, combineStress, stressAtom, isNeutralStress, type StressInput } from "./stress.ts";
 
 export interface PriceChangeTolerance {
   currentPrice: number;
@@ -171,70 +174,6 @@ export function customerTermsImpact(molecule: Molecule, options: number[] = [0, 
   });
 }
 
-export interface StressInput {
-  /** Myyntimäärän muutos, esim. −0.25 = −25 %. */
-  volumeChange?: number;
-  /** Hinnan muutos. */
-  priceChange?: number;
-  /** Muuttuvien kulujen muutos. */
-  variableCostChange?: number;
-  /** Kiinteiden kulujen (ml. palkat) muutos. */
-  fixedCostChange?: number;
-}
-
-const scale = (n: number, r: number | undefined): number => n * (1 + (r ?? 0));
-
-function stressAtom(a: RevenueAtom, s: StressInput): RevenueAtom {
-  switch (a.kind) {
-    case "TIME_CAPACITY": {
-      // Määrän lasku osuu kysyntään; jos kysyntä on rajaton, se osuu laskutettaviin tunteihin laskutusasteen kautta.
-      const demand =
-        a.demandHoursPerMonth === null
-          ? s.volumeChange
-            ? timeCapacityHours(a) * (1 + s.volumeChange)
-            : null
-          : scale(a.demandHoursPerMonth, s.volumeChange);
-      return {
-        ...a,
-        demandHoursPerMonth: demand === null ? null : Math.max(0, demand),
-        hourlyRate: scale(a.hourlyRate, s.priceChange),
-        variableCostPerHour: scale(a.variableCostPerHour, s.variableCostChange),
-        salaryPerPersonMonth: scale(a.salaryPerPersonMonth, s.fixedCostChange),
-      };
-    }
-    case "PHYSICAL_MATTER":
-      return {
-        ...a,
-        unitsPerMonth: Math.max(0, scale(a.unitsPerMonth, s.volumeChange)),
-        unitPrice: scale(a.unitPrice, s.priceChange),
-        unitCost: scale(a.unitCost, s.variableCostChange),
-      };
-    case "RECURRING_SUB":
-      return {
-        ...a,
-        newPerMonth: Math.max(0, scale(a.newPerMonth, s.volumeChange)),
-        startingSubscribers: Math.max(0, scale(a.startingSubscribers, s.volumeChange)),
-        pricePerMonth: scale(a.pricePerMonth, s.priceChange),
-        costPerSubscriberMonth: scale(a.costPerSubscriberMonth, s.variableCostChange),
-      };
-    case "TRANSACTIONAL_TRADE":
-      return {
-        ...a,
-        visitorsPerDay: Math.max(0, scale(a.visitorsPerDay, s.volumeChange)),
-        averageTicket: scale(a.averageTicket, s.priceChange),
-        costPerSale: scale(a.costPerSale, s.variableCostChange),
-      };
-  }
-}
-
-export function applyStress(molecule: Molecule, s: StressInput): Molecule {
-  return {
-    ...molecule,
-    atoms: molecule.atoms.map((a) => stressAtom(a, s)),
-    fixedCosts: molecule.fixedCosts.map((c) => ({ ...c, amountPerMonth: scale(c.amountPerMonth, s.fixedCostChange) })),
-  };
-}
-
 export interface StressResult {
   input: StressInput;
   base: SimulationResult;
@@ -243,4 +182,91 @@ export interface StressResult {
 
 export function stressTest(molecule: Molecule, s: StressInput): StressResult {
   return { input: s, base: simulate(molecule), stressed: simulate(applyStress(molecule, s)) };
+}
+
+// ---------------------------------------------------------------------------
+// Vaihteluvälit (Monte Carlo): epävarmuuden antaa käyttäjä, sitä ei arvata.
+// ---------------------------------------------------------------------------
+
+/** Käyttäjän arvioima vaihteluväli kullekin tekijälle (±osuus, esim. 0.2 = ±20 %). */
+export interface UncertaintyRanges {
+  volume: number;
+  price: number;
+  variableCost: number;
+  fixedCost: number;
+}
+
+export interface Percentiles {
+  p10: number;
+  p50: number;
+  p90: number;
+}
+
+export interface MonteCarloResult {
+  runs: number;
+  ranges: UncertaintyRanges;
+  endCash: Percentiles;
+  minCash: Percentiles;
+  totalProfit: Percentiles;
+  /** Osuus ajoista, joissa kassa menee miinukselle tarkasteluaikana. */
+  cashOutProbability: number;
+  /** Osuus ajoista, joissa vuoden tulos on tappiollinen. */
+  lossProbability: number;
+}
+
+/** Toistettava satunnaislukugeneraattori (mulberry32). */
+export function seededRandom(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function percentiles(values: number[]): Percentiles {
+  const s = [...values].sort((x, y) => x - y);
+  const at = (q: number) => s[Math.min(s.length - 1, Math.max(0, Math.round(q * (s.length - 1))))];
+  return { p10: at(0.1), p50: at(0.5), p90: at(0.9) };
+}
+
+/**
+ * Ajaa simulaation monta kertaa niin, että jokainen tekijä vaihtelee käyttäjän
+ * antamalla välillä (kolmiojakauma: todennäköisimmin nykyarvo).
+ */
+export function monteCarlo(molecule: Molecule, ranges: UncertaintyRanges, runs = 300, seed = 1): MonteCarloResult {
+  const rnd = seededRandom(seed);
+  const tri = (r: number) => (rnd() + rnd() - 1) * Math.max(0, r);
+  const end: number[] = [];
+  const min: number[] = [];
+  const profit: number[] = [];
+  let cashOut = 0;
+  let loss = 0;
+  const n = Math.max(10, Math.min(2000, Math.round(runs)));
+  for (let i = 0; i < n; i += 1) {
+    const r = simulate(
+      applyStress(molecule, {
+        volumeChange: tri(ranges.volume),
+        priceChange: tri(ranges.price),
+        variableCostChange: tri(ranges.variableCost),
+        fixedCostChange: tri(ranges.fixedCost),
+      }),
+    );
+    end.push(r.endCash);
+    min.push(r.minCash);
+    profit.push(r.totals.operatingProfit);
+    if (r.cashOutDay !== null) cashOut += 1;
+    if (r.totals.operatingProfit < 0) loss += 1;
+  }
+  return {
+    runs: n,
+    ranges,
+    endCash: percentiles(end),
+    minCash: percentiles(min),
+    totalProfit: percentiles(profit),
+    cashOutProbability: cashOut / n,
+    lossProbability: loss / n,
+  };
 }

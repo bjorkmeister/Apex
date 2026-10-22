@@ -1,7 +1,7 @@
 # Suunnitelma: yksi APEX, kaksi kieltä ja päivitetty tiekartta
 
 > [!NOTE]
-> **Päätökset tehty 22.10.2026:** nimi on **APEX Studio**, tiekartta (pilotti ennen pilveä) on hyväksytty ja prompt-to-widget tulee pilotin jälkeen. Kielituen toteutustapa on kuvattu luvussa 2.
+> **Päätökset tehty 22.10.2026:** nimi on **APEX Studio**, pilottia ei tehdä (rakennetaan pitkälle, testataan itse) ja vaiheet 9–14 ovat työn alla. Kielituen toteutustapa on kuvattu luvussa 2.
 
 ---
 
@@ -54,7 +54,7 @@ flowchart LR
   U5 --> U8["U8 War Roomin poisto"]
   U6 --> U8
   U3 --> U8
-  U7["U7 Toimitusketjumoduuli: päätös pilotin jälkeen"] -.-> U8
+  U7["U7 Toimitusketjumoduuli: päätös myöhemmin"] -.-> U8
 ```
 
 | Vaihe | Sisältö | Mistä War Roomista |
@@ -66,7 +66,7 @@ flowchart LR
 | **U4** | Markkinatieto: haku kalibroi oletuksia **lähdeviitteineen**. Jokaisella luvulla näkyy alkuperä: *oma arvio / tiliote / markkinatieto / valmentaja / perustamislista*. Tämä toteuttaa War Roomin `*`-merkinnät. | Market Research, oletusten `*` |
 | **U5** | Malliin kuukausittaiset kertoimet: sesongit (jäätelökioskin kesä) ja kriisit, joissa käyttäjä tekee päätöksen. | Crisis cards, living world |
 | **U6** | Liiketoimintasuunnitelma tai raportti mallista (Markdown, myöhemmin PDF) rahoittajalle tai pankille. | Executive Export |
-| **U7** | Toimitusketju- ja varastoerämoduuli valmistaville yrityksille: **päätetään pilotin palautteen perusteella**. Suositus: ei siirretä etukäteen. | warehouse, supply |
+| **U7** | Toimitusketju- ja varastoerämoduuli valmistaville yrityksille: **päätetään oman testauksen perusteella**. Suositus: ei siirretä etukäteen. | warehouse, supply |
 | **U8** | War Room ja sen testit poistetaan, kun kaikelle siirretylle on vastaavat testit Flow'n puolella. | koko `src/app`, `src/core` |
 
 ---
@@ -110,7 +110,7 @@ Tekstejä on nyt noin 400, ja jokainen uusi ominaisuus lisää niitä. Mitä my�
 | **I3 Englanti** | työkalu kääntää, ihminen tarkistaa näkyvimmät kohdat (aloitus, pääkortit, valmentaja). Komentotulkkiin lisätään englanninkieliset muodot ("raise prices 10%"). | Ei |
 | **Jatkuva** | uusi teksti kirjoitetaan suomeksi `fi.ts`:ään. Työkalu tuottaa englannin, ja tarkistus on osa julkaisua, mutta ei sen este. | Ei |
 
-**Pilotti voidaan ajaa suomeksi.** Pilotin käyttäjät ovat todennäköisesti suomalaisia, joten englannin ei tarvitse olla valmis ennen pilottia. Englannin tarkistus ja käyttöohje tulevat julkaisulle ennen kansainvälistä jakelua. Perusta (I1–I2) tehdään silti ennen yhdistämistä, jotta War Roomista siirretty koodi kirjoitetaan heti `t()`-kutsuilla.
+**Oma testaus voidaan tehdä suomeksi.** Englannin tarkistus ja käyttöohje tulevat julkaisulle ennen kansainvälistä jakelua. Perusta (I1–I2) tehdään silti ennen yhdistämistä, jotta War Roomista siirretty koodi kirjoitetaan heti `t()`-kutsuilla.
 
 ## 3. Miten roolit vaikuttavat tällä hetkellä
 
@@ -153,19 +153,19 @@ Tekstejä on nyt noin 400, ja jokainen uusi ominaisuus lisää niitä. Mitä my�
 | Vaihe | Nimi | Tila |
 | :-: | :-- | :-- |
 | 1–7 | Virtanäkymä, paneelit, kipurajat, atomimalli, tiliotteen tuonti, perustamislista, roolit | ✅ Valmis |
-| 8 | Valmentaja ja keskustelu, joka muuttaa mallia tarkistetuilla komennoilla | ✅ Valmis **ilman prompt-to-widgetiä** (siirretty vaiheeseen 12) |
-| **9** | **Kielituki FI / EN** (I1–I3, kirjoita kerran, käännä työkalulla) | 🆕 seuraava |
-| **10** | **APEX Studio** (U0–U1): nimet, reitit, liikeidea omin sanoin → malli | 🆕 |
-| **11** | **Pilotti 5–10 käyttäjällä** (suomeksi), palautetyökalu sovelluksessa ja opiskelijan tehtävät | ⬆️ ennen pilveä |
-| **12** | **Prompt-to-widget: omat widgetit** omalla API-avaimella, päälle/pois-kytkimet, kuvauspohjainen (ei ajettavaa koodia) | 🆕 pilotin jälkeen |
-| 13 | Skenaariot ja aikakone, yrittäjän jaksaminen, osa-alueiden tavoitteet | (oli 12) |
-| 14 | Neuvonantajat, markkinatieto lähteineen, raportti, toteutuma vs. suunnitelma | |
-| 15 | Sesongit ja kriisit | |
-| 16 | Pilvi, käyttäjätilit ja pysyvä muisti, neuvojan asiakasmallit | ⬇️ myöhemmäksi |
-| 17 | War Roomin poisto, päätös toimitusketjumoduulista | |
-| 18 | Kirjanpitorajapinnat (Procountor, Netvisor) | |
+| 8 | Valmentaja ja keskustelu, joka muuttaa mallia tarkistetuilla komennoilla | ✅ Valmis (prompt-to-widget vaiheessa 11) |
+| 9 | Kielituki FI / EN: suomi lähteenä, englanti työkalulla, varakielenä suomi | 🔨 työn alla |
+| 10 | APEX Studio: yksi sovellus, nimet ja reitit, liikeidea omin sanoin → malli | 🔨 työn alla |
+| 11 | Prompt-to-widget: omat widgetit omalla API-avaimella, päälle/pois-kytkimet, kuvauspohjainen (ei ajettavaa koodia) | 🔨 työn alla |
+| 12 | Skenaariot ja aikakone (A/B, vaihteluvälit), yrittäjän jaksaminen, osa-alueiden tavoitteet, opiskelijan tehtävät | 🔨 työn alla |
+| 13 | Neuvonantajat, markkinatieto lähteineen, lukujen alkuperä, raportti, toteuma vs. suunnitelma | 🔨 työn alla |
+| 14 | Sesongit ja kriisit | 🔨 työn alla |
+| 15 | Pilvi, käyttäjätilit ja pysyvä muisti, neuvojan asiakasmallit | |
+| 16 | War Roomin poisto, päätös toimitusketjumoduulista | |
+| 17 | Kirjanpitorajapinnat (Procountor, Netvisor) | |
+| – | Kaupallistaminen | myöhemmin; sitä ennen omaa ja tuttujen testausta jatkuvasti |
 
-### Vaihe 12: Prompt-to-widget
+### Vaihe 11: Prompt-to-widget
 
 Käyttäjä pyytää omin sanoin uutta toimintoa, ja kielimalli palauttaa **widgetin kuvauksen** (JSON), ei ohjelmakoodia. Kuvauksen piirtää meidän oma tarkistettu koodimme valmiista palikoista. Näin kielimallin virhe tai manipulointi ei pääse käsiksi käyttäjän tietoihin tai API-avaimeen.
 
@@ -179,9 +179,9 @@ Käyttäjä pyytää omin sanoin uutta toimintoa, ja kielimalli palauttaa **widg
 
 - **Hallinta:** päälle/pois-kytkin, muokkaus, poisto ja merkintä *"tekoälyn luoma, pyyntö: …"*. Widgetit tallentuvat mallin mukana, ja luomisen voi kumota.
 - **Kustannus:** käyttäjän omat tokenit (nykyinen BYOK-avain). Ilman avainta ovat käytössä valmiit mallipohjat ja jo luodut widgetit.
-- **Rajaus:** aidosti uutta laskentalogiikkaa (jota malli ei tunne) tämä ei kata. Se vaatisi erillisen eristetyn ratkaisun, ja siitä päätetään pilotin jälkeen.
+- **Rajaus:** aidosti uutta laskentalogiikkaa (jota malli ei tunne) tämä ei kata. Se vaatisi erillisen eristetyn ratkaisun, ja siitä päätetään myöhemmin.
 
-**Miksi pilotin jälkeen?** Pilotti kertoo, mitä käyttäjät oikeasti yrittävät tehdä, ja siitä saadaan oikeat valmiit palikat. Vaihe 8 on silti riittävä pilottiin, koska keskustelu osaa jo lisätä tulovirtoja, kuluja ja maksuehtoja.
+
 
 ---
 
@@ -190,8 +190,8 @@ Käyttäjä pyytää omin sanoin uutta toimintoa, ja kielimalli palauttaa **widg
 | Päätös | Tulos |
 | :-- | :-- |
 | Nimi War Roomin tilalle | **APEX Studio** ✅ |
-| Pilotti ennen pilveä | **Hyväksytty** ✅ |
-| Prompt-to-widget | **Pilotin jälkeen (vaihe 12)** ✅ |
+| Pilotti | **Poistettu** tiekartasta: rakennetaan mahdollisimman pitkälle, testataan itse ja tuttujen kesken, kaupallistetaan myöhemmin ✅ |
+| Prompt-to-widget | **Vaihe 11** ✅ |
 | Kielituen toteutustapa | Kirjoita kerran suomeksi, englanti työkalulla, varakieli suomi. Odottaa hyväksyntääsi. |
 
 Seuraava askel on vaihe 9 (kielituki), kun hyväksyt kielituen toteutustavan ja annat luvan aloittaa koodauksen.

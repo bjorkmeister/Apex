@@ -1,47 +1,56 @@
 /**
- * APEX Flow — selainsovellus (`src/flow/client/app.ts`).
+ * APEX Studio — selainsovellus (`src/flow/client/app.ts`).
  *
  * Tila elää selaimessa ja tallentuu localStorageen. Laskenta ajetaan samalla
- * atomiytimellä kuin testit, joten liukusäätimet päivittävät virrat heti ilman
- * palvelinkutsua. Keskusteleva valmentaja on ainoa toiminto, joka käyttää palvelinta.
+ * atomiytimellä kuin testit, joten vivut päivittävät näkymän heti ilman
+ * palvelinkutsua. Kielimallia käyttävät toiminnot kutsuvat palvelinta, ja
+ * jokaisella on sääntöpohjainen varavaihtoehto.
  */
 import type { AtomKind, Molecule } from "../kernel/types.ts";
 import { ATOM_KIND_LABELS, PRESET_LABELS, createPreset, emptyMolecule, type PresetId } from "../kernel/presets.ts";
-import { type StressInput, type StressResult, stressTest, withCustomerTerms } from "../kernel/sensitivity.ts";
+import { monteCarlo, stressTest, withCustomerTerms, type MonteCarloResult, type StressInput, type StressResult, type UncertaintyRanges } from "../kernel/sensitivity.ts";
+import { simulate } from "../kernel/simulate.ts";
 import { buildView, type FlowView, type NodeId } from "../model/view.ts";
 import { applyLever, leversFor, type Lever } from "../model/levers.ts";
-import {
-  addAtom,
-  addFixedCost,
-  removeAtom,
-  removeFixedCost,
-  renameAtom,
-  renameMolecule,
-  setAtomField,
-  setPayrollDay,
-  updateFixedCost,
-} from "../model/edit.ts";
+import { addAtom, addFixedCost, removeAtom, removeFixedCost, renameAtom, renameMolecule, setAtomField, setPayrollDay, updateFixedCost } from "../model/edit.ts";
 import { checklistView, emptyChecklist, setItemParam, toggleItem, type ChecklistState } from "../model/launchpad.ts";
-import { applyCommands, type PanelId } from "../model/commands.ts";
+import { applyCommands, PANELS, type ApplyOptions, type PanelId } from "../model/commands.ts";
 import { coachInsights, type CoachInsight } from "../model/coach.ts";
-import {
-  LENS_LABELS,
-  PERSONAS,
-  boundaryMessages,
-  lensHeadlines,
-  lensNodes,
-  leversForLens,
-  personaDef,
-  type LensId,
-  type PersonaId,
-} from "../model/personas.ts";
+import { ALL_TOOLS, LENS_LABELS, PERSONAS, boundaryMessages, lensHeadlines, lensNodes, leversForLens, personaDef, type LensId, type PersonaId } from "../model/personas.ts";
+import { ideaToMolecule } from "../model/genesis.ts";
+import { getProvenance, sourceLabel, withProvenance } from "../model/provenance.ts";
+import { buildScope, validateWidget, widgetFromTemplate, formatWidgetValue, type WidgetFormat, type WidgetSpec } from "../model/widgets.ts";
+import { createScenario, SCENARIO_COLORS, type Scenario } from "../model/scenarios.ts";
+import { brokenGoalMessages, evaluateGoals, GOAL_METRICS, suggestGoal, type Goal, type GoalMetric } from "../model/goals.ts";
+import { CRISIS_LIBRARY, SEASON_PROFILES, eventFromCard, randomCrisis, type SeasonProfileId } from "../model/seasons.ts";
+import { TASKS, taskStart } from "../model/tasks.ts";
+import { ruleAdvisors, type AdvisorRole } from "../model/advisors.ts";
+import { buildReport } from "../model/report.ts";
+import { analyzeStatement, defaultSelection, importCommands, parseStatementCsv, type ImportSelection, type MonthlyActual, type StatementAnalysis } from "../model/importer.ts";
 import { esc, eur, int, num, pct } from "../model/format.ts";
-import { FlowCanvas, renderTimeline } from "./canvas.ts";
+import { getLocale, isLocale, setLocale, t, type Locale } from "../i18n/index.ts";
+import { FlowCanvas, renderTimeline, type TimelineOverlay } from "./canvas.ts";
 import { renderDrawer } from "./drawer.ts";
 import { renderLaunchpad } from "./launchpad.ts";
 import { renderCoachPanel, renderCoachStrip, type ChatMessage } from "./coach.ts";
 import { renderImportPanel } from "./importer.ts";
-import { analyzeStatement, defaultSelection, importCommands, parseStatementCsv, type ImportSelection, type StatementAnalysis } from "../model/importer.ts";
+import { renderWidgetPanel, renderWidgetStrip } from "./widgets.ts";
+import {
+  markdownToHtml,
+  renderActuals,
+  renderAdvisors,
+  renderFounder,
+  renderGoals,
+  renderMarket,
+  renderReport,
+  renderScenarios,
+  renderSeasons,
+  renderTaskBanner,
+  renderTasks,
+  type AdvisorsState,
+  type MarketState,
+  type TaskState,
+} from "./tools.ts";
 
 const STORAGE_KEY = "apex.flow.v1";
 const UNDO_LIMIT = 30;
@@ -53,55 +62,58 @@ interface PersistedState {
   persona?: PersonaId;
   lens?: LensId;
   chat?: ChatMessage[];
+  locale?: Locale;
+  widgets?: WidgetSpec[];
+  goals?: Goal[];
+  scenarios?: Scenario[];
+  actuals?: MonthlyActual[];
+  task?: TaskState | null;
+  completedTasks?: string[];
+  mcRanges?: UncertaintyRanges;
 }
 
 interface Snapshot {
   molecule: Molecule;
   checklist: ChecklistState;
+  widgets: WidgetSpec[];
+  goals: Goal[];
 }
 
-interface AppState {
-  molecule: Molecule | null;
-  view: FlowView | null;
-  checklist: ChecklistState;
-  persona: PersonaId;
-  lens: LensId;
-  insights: CoachInsight[];
-  chat: ChatMessage[];
-  chatBusy: boolean;
-  drawer: PanelId | null;
-  stress: StressResult | null;
-  showAllLevers: boolean;
-  day: number;
-  playing: boolean;
-  undo: Snapshot[];
-  leverDragging: boolean;
-  toast: string | null;
-  importData: { analysis: StatementAnalysis | null; selection: ImportSelection; error: string | null } | null;
-  onboardingKinds: Set<AtomKind>;
-  onboardingName: string;
-}
-
-const state: AppState = {
-  molecule: null,
-  view: null,
+const state = {
+  molecule: null as Molecule | null,
+  view: null as FlowView | null,
   checklist: emptyChecklist(),
-  persona: "founder",
-  lens: "all",
-  insights: [],
-  chat: [],
+  persona: "founder" as PersonaId,
+  lens: "all" as LensId,
+  insights: [] as CoachInsight[],
+  chat: [] as ChatMessage[],
   chatBusy: false,
-  drawer: null,
-  stress: null,
+  drawer: null as PanelId | null,
+  stress: null as StressResult | null,
   showAllLevers: false,
   day: 0,
   playing: false,
-  undo: [],
+  undo: [] as Snapshot[],
   leverDragging: false,
-  toast: null,
-  importData: null,
-  onboardingKinds: new Set(),
+  importData: null as { analysis: StatementAnalysis | null; selection: ImportSelection; error: string | null } | null,
+  widgets: [] as WidgetSpec[],
+  widgetPanel: { busy: false, error: null as string | null, lastPrompt: "" },
+  goals: [] as Goal[],
+  scenarios: [] as Scenario[],
+  mc: null as MonteCarloResult | null,
+  mcRanges: { volume: 0.2, price: 0.05, variableCost: 0.1, fixedCost: 0.05 } as UncertaintyRanges,
+  actuals: [] as MonthlyActual[],
+  task: null as TaskState | null,
+  completedTasks: [] as string[],
+  market: { busy: false, error: null, query: "", result: null } as MarketState,
+  advisors: { busy: false, question: "", result: null } as AdvisorsState,
+  report: "",
+  llm: false,
+  onboardingKinds: new Set<AtomKind>(),
   onboardingName: "",
+  onboardingIdea: "",
+  genesisBusy: false,
+  genesisNotes: [] as string[],
 };
 
 let canvas: FlowCanvas | null = null;
@@ -124,13 +136,21 @@ function load(): void {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return;
-    const parsed = JSON.parse(raw) as PersistedState;
-    if (!parsed || parsed.version !== 1) return;
-    if (isMolecule(parsed.molecule)) state.molecule = parsed.molecule;
-    if (parsed.checklist && typeof parsed.checklist.items === "object") state.checklist = parsed.checklist;
-    if (parsed.persona && PERSONAS.some((p) => p.id === parsed.persona)) state.persona = parsed.persona;
-    if (parsed.lens && parsed.lens in LENS_LABELS) state.lens = parsed.lens;
-    if (Array.isArray(parsed.chat)) state.chat = parsed.chat.filter((c) => c && typeof c.text === "string" && !c.pending).slice(-50);
+    const p = JSON.parse(raw) as PersistedState;
+    if (!p || p.version !== 1) return;
+    if (isMolecule(p.molecule)) state.molecule = p.molecule;
+    if (p.checklist && typeof p.checklist.items === "object") state.checklist = p.checklist;
+    if (p.persona && PERSONAS.some((x) => x.id === p.persona)) state.persona = p.persona;
+    if (p.lens && p.lens in LENS_LABELS) state.lens = p.lens;
+    if (Array.isArray(p.chat)) state.chat = p.chat.filter((c) => c && typeof c.text === "string" && !c.pending).slice(-50);
+    if (isLocale(p.locale)) setLocale(p.locale);
+    if (Array.isArray(p.widgets)) state.widgets = p.widgets.filter((w) => w && typeof w.id === "string").slice(0, 40);
+    if (Array.isArray(p.goals)) state.goals = p.goals.filter((g) => g && g.metric in GOAL_METRICS);
+    if (Array.isArray(p.scenarios)) state.scenarios = p.scenarios.filter((s) => s && isMolecule(s.molecule)).slice(0, 10);
+    if (Array.isArray(p.actuals)) state.actuals = p.actuals;
+    if (p.task && isMolecule(p.task.start) && TASKS.some((d) => d.id === p.task!.id)) state.task = p.task;
+    if (Array.isArray(p.completedTasks)) state.completedTasks = p.completedTasks.filter((x) => typeof x === "string");
+    if (p.mcRanges) state.mcRanges = { ...state.mcRanges, ...p.mcRanges };
   } catch {
     // Rikkinäinen tallenne: aloitetaan puhtaalta pöydältä.
   }
@@ -145,6 +165,14 @@ function save(): void {
       persona: state.persona,
       lens: state.lens,
       chat: state.chat.filter((c) => !c.pending).slice(-50),
+      locale: getLocale(),
+      widgets: state.widgets,
+      goals: state.goals,
+      scenarios: state.scenarios,
+      actuals: state.actuals,
+      task: state.task,
+      completedTasks: state.completedTasks,
+      mcRanges: state.mcRanges,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   } catch {
@@ -154,7 +182,7 @@ function save(): void {
 
 function pushUndo(): void {
   if (!state.molecule) return;
-  state.undo.push({ molecule: state.molecule, checklist: state.checklist });
+  state.undo.push({ molecule: state.molecule, checklist: state.checklist, widgets: state.widgets, goals: state.goals });
   if (state.undo.length > UNDO_LIMIT) state.undo.shift();
   updateUndoButton();
 }
@@ -164,9 +192,11 @@ function undo(): void {
   if (!snap) return;
   state.molecule = snap.molecule;
   state.checklist = snap.checklist;
+  state.widgets = snap.widgets;
+  state.goals = snap.goals;
   state.stress = null;
   refresh({ levers: true, persist: true });
-  showToast("Viimeisin muutos kumottu.");
+  showToast(t("Viimeisin muutos kumottu."));
 }
 
 function updateUndoButton(): void {
@@ -175,20 +205,19 @@ function updateUndoButton(): void {
 }
 
 function showToast(text: string): void {
-  state.toast = text;
   const el = $("#fl-toast");
   if (!el) return;
   el.textContent = text;
   el.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => el.classList.remove("show"), 3200);
+  toastTimer = window.setTimeout(() => el.classList.remove("show"), 3500);
 }
 
 // ---------------------------------------------------------------------------
 // Renderöinti
 // ---------------------------------------------------------------------------
 
-function formatLever(l: Lever, v: number): string {
+function formatLever(l: Pick<Lever, "format" | "step">, v: number): string {
   switch (l.format) {
     case "eur":
       return eur(v);
@@ -197,89 +226,130 @@ function formatLever(l: Lever, v: number): string {
     case "int":
       return int(v);
     case "days":
-      return `${int(v)} pv`;
+      return t("{n} pv", { n: int(v) });
     default:
       return num(v);
   }
 }
 
+const TOOL_LABELS: Record<string, () => string> = {
+  tasks: () => `🎯 ${t("Tehtävät")}`,
+  scenarios: () => `🔀 ${t("Skenaariot")}`,
+  founder: () => `🧑 ${t("Yrittäjä")}`,
+  goals: () => `🏁 ${t("Tavoitteet")}`,
+  seasons: () => `🌦 ${t("Sesongit ja kriisit")}`,
+  advisors: () => `👥 ${t("Neuvonantajat")}`,
+  market: () => `🌍 ${t("Markkinatieto")}`,
+  widgets: () => `🧩 ${t("Widgetit")}`,
+  actuals: () => `📊 ${t("Toteuma")}`,
+  report: () => `📄 ${t("Raportti")}`,
+};
+
+function langToggle(): string {
+  return `<div class="fl-lang" role="group" aria-label="${esc(t("Kieli"))}">${(["fi", "en"] as Locale[])
+    .map((l) => `<button class="fl-lang-btn" data-action="set-locale" data-locale="${l}" aria-pressed="${getLocale() === l}">${l.toUpperCase()}</button>`)
+    .join("")}</div>`;
+}
+
 function renderOnboarding(): void {
   canvas?.destroy();
   canvas = null;
+  document.documentElement.lang = getLocale();
   const personas = PERSONAS.map(
-    (p) => `<button class="ob-persona ${state.persona === p.id ? "on" : ""}" data-action="set-persona" data-persona="${p.id}" aria-pressed="${state.persona === p.id}" title="${esc(p.hint)}">${esc(p.title)}</button>`,
+    (p) => `<button class="ob-persona ${state.persona === p.id ? "on" : ""}" data-action="set-persona" data-persona="${p.id}" aria-pressed="${state.persona === p.id}" title="${esc(t(p.hint))}">${esc(t(p.title))}</button>`,
   ).join("");
   const kinds = (Object.keys(ATOM_KIND_LABELS) as AtomKind[])
     .map((k) => {
       const on = state.onboardingKinds.has(k);
       return `<button class="ob-card ${on ? "on" : ""}" data-action="toggle-kind" data-kind="${k}" aria-pressed="${on}">
-        <b>${esc(ATOM_KIND_LABELS[k].title)}</b><span>${esc(ATOM_KIND_LABELS[k].hint)}</span></button>`;
+        <b>${esc(t(ATOM_KIND_LABELS[k].title))}</b><span>${esc(t(ATOM_KIND_LABELS[k].hint))}</span></button>`;
     })
     .join("");
   const presets = (Object.keys(PRESET_LABELS) as PresetId[])
-    .map((p) => `<button class="ob-preset" data-action="preset" data-preset="${p}"><b>${esc(PRESET_LABELS[p].title)}</b><span>${esc(PRESET_LABELS[p].hint)}</span></button>`)
+    .map((p) => `<button class="ob-preset" data-action="preset" data-preset="${p}"><b>${esc(t(PRESET_LABELS[p].title))}</b><span>${esc(t(PRESET_LABELS[p].hint))}</span></button>`)
     .join("");
+  const tasks = TASKS.map((d) => `<button class="ob-preset" data-action="task-start" data-id="${d.id}"><b>${state.completedTasks.includes(d.id) ? "✅ " : "🎯 "}${esc(t(d.title))}</b><span>${esc(t(d.brief))}</span></button>`).join("");
   root.innerHTML = `
   <header class="fl-header">
-    <a href="/" class="fl-back">← APEX</a>
-    <div class="fl-brand">APEX <b>Flow</b> <span class="fl-beta">beta</span></div>
+    <div class="fl-brand">APEX <b>Studio</b></div>
+    <div class="fl-header-actions">${langToggle()}<a href="/classic" class="fl-back">${esc(t("Klassinen näkymä"))}</a></div>
   </header>
   <main class="ob-main">
-    <div class="ob-step">Käytän APEXia, koska…</div>
+    <div class="ob-step">${esc(t("Käytän APEXia, koska…"))}</div>
     <div class="ob-personas">${personas}</div>
-    <h1>Mitä yrityksesi myy?</h1>
-    <p class="ob-lead">Valitse yksi tai useampi. Moni yritys myy usean tavan yhdistelmää – esimerkiksi tunteja ja kuukausitilauksia.</p>
-    <label class="ob-name">Yrityksen nimi <input id="ob-name" value="${esc(state.onboardingName)}" placeholder="esim. Oma konsultointi"/></label>
+    <h1>${esc(t("Kerro liikeideasi"))}</h1>
+    <p class="ob-lead">${esc(t("Kuvaile omin sanoin, mitä aiot myydä ja kenelle. APEX rakentaa siitä mallin, jota voit muokata."))}</p>
+    <textarea id="ob-idea" class="ob-idea" rows="3" maxlength="2000" placeholder="${esc(t("Esim. Avaan jäätelökioskin Helsingin rantaan. Alkupääoma 6 000 €."))}">${esc(state.onboardingIdea)}</textarea>
+    <div class="ob-row">
+      <button class="ob-start" data-action="genesis" ${state.genesisBusy ? "disabled" : ""}>${state.genesisBusy ? esc(t("Rakennetaan…")) : esc(t("Rakenna malli →"))}</button>
+      <span class="fd-note">${esc(state.llm ? t("Kielimalli käytössä") : t("Ilman kielimallia: tunnistan toimialan avainsanoista"))}</span>
+    </div>
+    <h2>${esc(t("Tai valitse, mitä yrityksesi myy"))}</h2>
+    <label class="ob-name">${esc(t("Yrityksen nimi"))} <input id="ob-name" value="${esc(state.onboardingName)}" placeholder="${esc(t("esim. Oma konsultointi"))}"/></label>
     <div class="ob-cards">${kinds}</div>
-    <button class="ob-start" data-action="start" ${state.onboardingKinds.size === 0 ? "disabled" : ""}>Rakenna yritykseni →</button>
-    <h2>Tai aloita esimerkistä</h2>
+    <button class="ob-start secondary" data-action="start" ${state.onboardingKinds.size === 0 ? "disabled" : ""}>${esc(t("Rakenna yritykseni →"))}</button>
+    <h2>${esc(t("Tai aloita esimerkistä"))}</h2>
     <div class="ob-presets">${presets}</div>
-    <p class="ob-foot">Kaikki luvut ovat muokattavia oletuksia. Laskelmat ilman arvonlisäveroa. Malli tallentuu vain tähän selaimeen.</p>
+    <h2>${esc(t("Harjoitustehtävät"))}</h2>
+    <div class="ob-presets">${tasks}</div>
+    <p class="ob-foot">${esc(t("Kaikki luvut ovat muokattavia oletuksia. Laskelmat ilman arvonlisäveroa. Malli tallentuu vain tähän selaimeen."))}</p>
   </main>`;
 }
 
 function renderShell(): void {
   const m = state.molecule!;
   const p = personaDef(state.persona);
-  const personaOptions = PERSONAS.map((x) => `<option value="${x.id}" ${x.id === state.persona ? "selected" : ""}>${esc(x.title)}</option>`).join("");
+  document.documentElement.lang = getLocale();
+  const personaOptions = PERSONAS.map((x) => `<option value="${x.id}" ${x.id === state.persona ? "selected" : ""}>${esc(t(x.title))}</option>`).join("");
   const lensButtons = p.lensPicker
-    ? `<div class="fl-lens" role="group" aria-label="Näkökulma">${(Object.keys(LENS_LABELS) as LensId[])
-        .map((l) => `<button class="fl-lens-btn" data-action="set-lens" data-lens="${l}" aria-pressed="${state.lens === l}">${esc(LENS_LABELS[l])}</button>`)
+    ? `<div class="fl-lens" role="group" aria-label="${esc(t("Näkökulma"))}">${(Object.keys(LENS_LABELS) as LensId[])
+        .map((l) => `<button class="fl-lens-btn" data-action="set-lens" data-lens="${l}" aria-pressed="${state.lens === l}">${esc(t(LENS_LABELS[l]))}</button>`)
         .join("")}</div>`
     : "";
+  const primary = p.tools.filter((x) => ALL_TOOLS.includes(x));
+  const rest = ALL_TOOLS.filter((x) => !primary.includes(x));
+  const toolBtn = (id: string) => `<button class="fl-tool" data-action="open" data-node="${id}">${esc(TOOL_LABELS[id]())}</button>`;
   root.innerHTML = `
   <header class="fl-header">
-    <a href="/" class="fl-back">← APEX</a>
-    <div class="fl-brand">APEX <b>Flow</b> <span class="fl-beta">beta</span></div>
-    <input class="fl-name" data-rename-molecule value="${esc(m.name)}" aria-label="Yrityksen nimi"/>
+    <div class="fl-brand">APEX <b>Studio</b></div>
+    <input class="fl-name" data-rename-molecule value="${esc(m.name)}" aria-label="${esc(t("Yrityksen nimi"))}"/>
     <div class="fl-header-actions">
-      <label class="fl-persona">Rooli <select data-persona-select aria-label="Rooli">${personaOptions}</select></label>
-      <button class="fl-btn ghost" data-action="undo" id="fl-undo" title="Kumoa viimeisin muutos" ${state.undo.length ? "" : "disabled"}>↶ Kumoa</button>
-      <button class="fl-btn ${p.launchpad ? "primary" : ""}" data-action="open" data-node="launchpad" id="fl-lp-btn">🚀 Perustamislista <span class="fl-badge" id="fl-lp-count"></span></button>
-      <button class="fl-btn ghost" data-action="reset">Aloita alusta</button>
+      ${langToggle()}
+      <label class="fl-persona">${esc(t("Rooli"))} <select data-persona-select aria-label="${esc(t("Rooli"))}">${personaOptions}</select></label>
+      <button class="fl-btn ghost" data-action="undo" id="fl-undo" title="${esc(t("Kumoa viimeisin muutos"))}" ${state.undo.length ? "" : "disabled"}>↶ ${esc(t("Kumoa"))}</button>
+      <button class="fl-btn ${p.launchpad ? "primary" : ""}" data-action="open" data-node="launchpad">🚀 ${esc(t("Perustamislista"))} <span class="fl-badge" id="fl-lp-count"></span></button>
+      <details class="fl-menu"><summary class="fl-btn ghost">⋯</summary><div class="fl-menu-body">
+        <a href="/classic">${esc(t("Klassinen näkymä"))}</a>
+        <button data-action="reset">${esc(t("Aloita alusta"))}</button>
+      </div></details>
     </div>
   </header>
-  ${lensButtons ? `<div class="fl-subheader">${lensButtons}<div class="fl-boundary" id="fl-boundary"></div></div>` : ""}
+  <div class="fl-subheader" id="fl-subheader">${lensButtons}<div class="fl-goals" id="fl-goals"></div><div class="fl-boundary" id="fl-boundary"></div></div>
+  <nav class="fl-toolbar" aria-label="${esc(t("Työkalut"))}">${primary.map(toolBtn).join("")}${
+    rest.length ? `<details class="fl-menu"><summary class="fl-tool">${esc(t("Lisää työkaluja"))} ▾</summary><div class="fl-menu-body">${rest.map(toolBtn).join("")}</div></details>` : ""
+  }</nav>
   <main class="fl-main">
     <section class="fl-stage">
+      <div id="fl-task"></div>
       <div class="fl-headlines" id="fl-headlines"></div>
       <div id="fl-coach"></div>
-      ${p.quickStress ? `<div class="fl-quickstress"><span>Stressitesti:</span>
-        <button class="fd-chip small" data-action="stress" data-volume="-0.25">Myynti −25 %</button>
-        <button class="fd-chip small" data-action="stress" data-price="-0.1">Hinnat −10 %</button>
-        <button class="fd-chip small" data-action="stress" data-fixed="0.15">Kiinteät kulut +15 %</button>
-        <button class="fd-chip small" data-action="stress" data-variable="0.2">Ostohinnat +20 %</button></div>` : ""}
+      <div id="fl-widgets"></div>
+      ${p.quickStress ? `<div class="fl-quickstress"><span>${esc(t("Stressitesti:"))}</span>
+        <button class="fd-chip small" data-action="stress" data-volume="-0.25">${esc(t("Myynti −25 %"))}</button>
+        <button class="fd-chip small" data-action="stress" data-price="-0.1">${esc(t("Hinnat −10 %"))}</button>
+        <button class="fd-chip small" data-action="stress" data-fixed="0.15">${esc(t("Kiinteät kulut +15 %"))}</button>
+        <button class="fd-chip small" data-action="stress" data-variable="0.2">${esc(t("Ostohinnat +20 %"))}</button></div>` : ""}
       <div class="fl-canvas" id="fl-canvas"></div>
       <div class="fl-timeline">
         <div class="fl-timeline-bar">
-          <button class="fl-btn" data-action="play" id="fl-play">▶ Toista vuosi</button>
-          <input type="range" id="fl-day" min="0" max="359" step="1" value="${state.day}" aria-label="Simulaation päivä"/>
+          <button class="fl-btn" data-action="play" id="fl-play">▶ ${esc(t("Toista vuosi"))}</button>
+          <input type="range" id="fl-day" min="0" max="359" step="1" value="${state.day}" aria-label="${esc(t("Simulaation päivä"))}"/>
         </div>
         <div id="fl-timeline" data-action="timeline-click"></div>
       </div>
     </section>
     <aside class="fl-side">
-      <div class="fl-side-head"><h3>Vivut</h3><span>Vedä ja katso mitä tapahtuu</span></div>
+      <div class="fl-side-head"><h3>${esc(t("Vivut"))}</h3><span>${esc(t("Vedä ja katso mitä tapahtuu"))}</span></div>
       <div id="fl-levers"></div>
     </aside>
   </main>
@@ -309,11 +379,20 @@ function renderHeadlines(v: FlowView): void {
       </button>`,
     )
     .join("");
+  const statuses = evaluateGoals(v, state.goals).filter((s) => state.lens === "all" || s.goal.lens === state.lens);
+  const goalsEl = $("#fl-goals");
+  if (goalsEl) {
+    goalsEl.innerHTML = statuses
+      .map((s) => `<button class="fl-goal ${s.ok ? "ok" : s.ok === false ? "bad" : ""}" data-action="open" data-node="goals">${s.ok ? "✓" : s.ok === false ? "✗" : "○"} ${esc(s.label)}</button>`)
+      .join("");
+  }
   const boundary = $("#fl-boundary");
   if (boundary) {
-    const msgs = boundaryMessages(v, state.lens);
-    boundary.innerHTML = msgs.map((m) => `<span>↔ ${esc(m)}</span>`).join("");
+    const msgs = [...boundaryMessages(v, state.lens), ...brokenGoalMessages(statuses, state.lens)];
+    boundary.innerHTML = msgs.map((x) => `<span>↔ ${esc(x)}</span>`).join("");
   }
+  const sub = $("#fl-subheader");
+  if (sub) sub.hidden = !personaDef(state.persona).lensPicker && statuses.length === 0;
 }
 
 function renderLevers(): void {
@@ -328,34 +407,57 @@ function renderLevers(): void {
   const html = [...groups.entries()]
     .map(
       ([g, ls]) => `<div class="lv-group"><div class="lv-group-title">${esc(g)}</div>${ls
-        .map(
-          (l) => `<div class="lv-row" data-lever-row="${esc(l.id)}">
-            <div class="lv-top"><label for="lv-${esc(l.id)}">${esc(l.label)}</label><output id="lvo-${esc(l.id)}">${esc(formatLever(l, l.value))}</output></div>
+        .map((l) => {
+          const prov = getProvenance(m, l.id);
+          return `<div class="lv-row">
+            <div class="lv-top"><label for="lv-${esc(l.id)}">${esc(t(l.label))} <span class="pv pv-${prov?.source ?? "preset"}" title="${esc(t("Lähde: {source}", { source: sourceLabel(prov) }))}${prov?.note ? esc(` – ${prov.note}`) : ""}">●</span></label><output id="lvo-${esc(l.id)}">${esc(formatLever(l, l.value))}</output></div>
             <input type="range" id="lv-${esc(l.id)}" data-lever="${esc(l.id)}" min="${l.min}" max="${l.max}" step="${l.step}" value="${l.value}"/>
-            ${l.hint ? `<div class="lv-hint">${esc(l.hint)}</div>` : ""}
-          </div>`,
-        )
+            ${l.hint ? `<div class="lv-hint">${esc(t(l.hint))}</div>` : ""}
+          </div>`;
+        })
         .join("")}</div>`,
     )
     .join("");
   const hidden = levers.length - levers.filter((l) => l.primary).length;
-  $("#fl-levers")!.innerHTML = `${html || `<p class="fd-note">Tällä näkökulmalla ei ole vipuja.</p>`}${
-    hidden > 0
-      ? `<button class="fl-btn ghost wide" data-action="toggle-levers">${state.showAllLevers ? "Näytä vain tärkeimmät" : `Lisää vipuja (${hidden})`}</button>`
-      : ""
-  }`;
+  $("#fl-levers")!.innerHTML = `${html || `<p class="fd-note">${esc(t("Tällä näkökulmalla ei ole vipuja."))}</p>`}${
+    hidden > 0 ? `<button class="fl-btn ghost wide" data-action="toggle-levers">${esc(state.showAllLevers ? t("Näytä vain tärkeimmät") : t("Lisää vipuja ({n})", { n: hidden }))}</button>` : ""
+  }
+  <p class="fd-note pv-legend"><span class="pv pv-user">●</span> ${esc(t("oma arvio"))} <span class="pv pv-preset">●</span> ${esc(t("oletus"))} <span class="pv pv-coach">●</span> ${esc(t("valmentaja"))} <span class="pv pv-import">●</span> ${esc(t("tiliote"))} <span class="pv pv-market">●</span> ${esc(t("markkinatieto"))}</p>`;
 }
 
-function renderCoachNow(): void {
-  const host = $("#fl-coach");
-  if (!host) return;
-  host.innerHTML = renderCoachStrip(state.insights, personaDef(state.persona).teach);
+function widgetContext() {
+  return { molecule: state.molecule!, view: state.view!, scope: buildScope(state.molecule!, state.view!) };
+}
+
+function renderWidgetsNow(): void {
+  const host = $("#fl-widgets");
+  if (!host || !state.molecule || !state.view) return;
+  const active = document.activeElement as HTMLInputElement | null;
+  if (state.leverDragging && active && host.contains(active)) {
+    // Vivun veto käynnissä widgetissä: päivitetään vain luvut, ettei liukusäädin katkea.
+    host.querySelectorAll<HTMLOutputElement>("[data-widget-out]").forEach((o) => {
+      const input = host.querySelector<HTMLInputElement>(`[data-widget-id="${o.dataset.widgetOut}"]`);
+      if (input) o.textContent = formatWidgetValue(Number(input.value), input.dataset.widgetFmt as WidgetFormat);
+    });
+    return;
+  }
+  host.innerHTML = renderWidgetStrip(state.widgets, widgetContext());
+}
+
+function taskProgress(): { done: boolean; progress: string } | null {
+  if (!state.task || !state.molecule || !state.view) return null;
+  const def = TASKS.find((d) => d.id === state.task!.id);
+  return def ? def.check(state.molecule, state.view, state.task.start) : null;
 }
 
 function renderTimelineNow(): void {
   if (!state.view) return;
+  const overlays: TimelineOverlay[] = state.scenarios
+    .map((s, i) => ({ s, i }))
+    .filter(({ s }) => s.compare)
+    .map(({ s, i }) => ({ name: s.name, color: SCENARIO_COLORS[i % SCENARIO_COLORS.length], cash: simulate(s.molecule).days.map((d) => d.cash) }));
   const tl = $("#fl-timeline");
-  if (tl) tl.innerHTML = renderTimeline(state.view, state.day);
+  if (tl) tl.innerHTML = renderTimeline(state.view, state.day, overlays);
   const range = $<HTMLInputElement>("#fl-day");
   if (range && Number(range.value) !== state.day) range.value = String(state.day);
   canvas?.setDay(state.day);
@@ -389,6 +491,45 @@ function withPreservedFocus(container: HTMLElement, render: () => void): void {
   }
 }
 
+function panelHtml(panel: PanelId): string {
+  const m = state.molecule!;
+  const v = state.view!;
+  const teach = personaDef(state.persona).teach;
+  switch (panel) {
+    case "launchpad":
+      return renderLaunchpad(checklistView(m, v, state.checklist));
+    case "coach":
+      return renderCoachPanel(state.insights, state.chat, teach, state.chatBusy);
+    case "import": {
+      const d = state.importData;
+      return renderImportPanel(m, d?.analysis ?? null, d?.selection ?? { costKeys: [], calibrateRevenue: false, useBalance: false, saveActuals: false }, v.monthlyRevenue, d?.analysis ? null : d?.error ?? t("Tiliotetta ei ole valittu."));
+    }
+    case "widgets":
+      return renderWidgetPanel(state.widgets, widgetContext(), { llm: state.llm, ...state.widgetPanel });
+    case "scenarios":
+      return renderScenarios(m, state.scenarios, state.mc, state.mcRanges);
+    case "founder":
+      return renderFounder(m);
+    case "goals":
+      return renderGoals(v, state.goals);
+    case "seasons":
+      return renderSeasons(m, v);
+    case "report":
+      state.report = buildReport({ molecule: m, checklist: state.checklist, scenarios: state.scenarios });
+      return renderReport(state.report);
+    case "actuals":
+      return renderActuals(v, state.actuals);
+    case "tasks":
+      return renderTasks(state.task, state.completedTasks, taskProgress());
+    case "market":
+      return renderMarket(m, state.market, state.llm);
+    case "advisors":
+      return renderAdvisors(ruleAdvisors(m, v, state.insights), state.advisors, state.llm);
+    default:
+      return renderDrawer(panel, { view: v, stress: state.stress });
+  }
+}
+
 function renderDrawerNow(): void {
   const drawer = $("#fl-drawer");
   const backdrop = $("#fl-drawer-backdrop");
@@ -401,16 +542,9 @@ function renderDrawerNow(): void {
   }
   const panel = state.drawer;
   withPreservedFocus(drawer, () => {
-    if (panel === "launchpad") drawer.innerHTML = renderLaunchpad(checklistView(state.molecule!, state.view!, state.checklist));
-    else if (panel === "coach") drawer.innerHTML = renderCoachPanel(state.insights, state.chat, personaDef(state.persona).teach, state.chatBusy);
-    else if (panel === "import") {
-      const d = state.importData;
-      drawer.innerHTML = d && d.analysis
-        ? renderImportPanel(state.molecule!, d.analysis, d.selection, state.view!.monthlyRevenue, null)
-        : renderImportPanel(state.molecule!, analyzeStatement([]), { costKeys: [], calibrateRevenue: false, useBalance: false }, 0, d?.error ?? "Tiliotetta ei ole valittu.");
-    }
-    else drawer.innerHTML = renderDrawer(panel, { view: state.view!, stress: state.stress });
+    drawer.innerHTML = panelHtml(panel);
   });
+  drawer.classList.toggle("wide", panel === "report" || panel === "scenarios" || panel === "advisors");
   if (panel === "coach") {
     const log = $("#co-log");
     if (log) log.scrollTop = log.scrollHeight;
@@ -430,7 +564,17 @@ function refresh(opts: { levers?: boolean; persist?: boolean } = {}): void {
   const lp = checklistView(state.molecule, state.view, state.checklist);
   state.insights = coachInsights(state.molecule, state.view, lp, state.persona);
   renderHeadlines(state.view);
-  renderCoachNow();
+  const coach = $("#fl-coach");
+  if (coach) coach.innerHTML = renderCoachStrip(state.insights, personaDef(state.persona).teach);
+  renderWidgetsNow();
+  const progress = taskProgress();
+  const taskEl = $("#fl-task");
+  if (taskEl) taskEl.innerHTML = renderTaskBanner(state.task, progress);
+  if (progress?.done && state.task && !state.completedTasks.includes(state.task.id)) {
+    state.completedTasks.push(state.task.id);
+    showToast(`🎉 ${t("Tehtävä ratkaistu!")}`);
+    opts.persist = true;
+  }
   canvas?.update(state.view);
   canvas?.setFocus(lensNodes(state.lens));
   renderTimelineNow();
@@ -454,6 +598,7 @@ function updateLeverOutputs(): void {
 function openDrawer(id: PanelId): void {
   state.drawer = id;
   if (id !== "cash") state.stress = null;
+  root.querySelectorAll<HTMLDetailsElement>("details.fl-menu[open]").forEach((d) => (d.open = false));
   renderDrawerNow();
   if (id === "coach") $<HTMLInputElement>("#co-input")?.focus();
 }
@@ -472,13 +617,18 @@ function setMolecule(m: Molecule, structural = false): void {
   refresh({ levers: structural, persist: true });
 }
 
-function startMolecule(m: Molecule): void {
+function startMolecule(m: Molecule, keepTask = false): void {
   state.molecule = m;
   state.checklist = emptyChecklist();
   state.undo = [];
   state.chat = [];
+  state.mc = null;
+  state.market.result = null;
+  state.advisors.result = null;
+  if (!keepTask) state.task = null;
   state.lens = personaDef(state.persona).defaultLens;
   state.day = 0;
+  state.drawer = null;
   save();
   renderShell();
   refresh({ levers: true });
@@ -492,10 +642,10 @@ function runStress(s: StressInput): void {
   renderDrawerNow();
 }
 
-/** Soveltaa valmentajan tai keskustelun komennot (validoidaan aina uudelleen). */
-function runCommands(raw: unknown[]): string[] {
+/** Soveltaa komennot (validoidaan aina uudelleen). */
+function runCommands(raw: unknown[], opts: ApplyOptions = {}): string[] {
   if (!state.molecule) return [];
-  const r = applyCommands(state.molecule, state.checklist, raw);
+  const r = applyCommands(state.molecule, state.checklist, raw, opts);
   if (r.molecule !== state.molecule || r.checklist !== state.checklist) {
     pushUndo();
     state.molecule = r.molecule;
@@ -509,30 +659,37 @@ function runCommands(raw: unknown[]): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Keskusteleva valmentaja
+// Palvelinkutsut
 // ---------------------------------------------------------------------------
+
+async function post<T>(url: string, body: Record<string, unknown>): Promise<T> {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, locale: getLocale() }) });
+  const data = (await res.json()) as T & { error?: string };
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+  return data;
+}
 
 async function sendChat(text: string): Promise<void> {
   const message = text.trim();
   if (!message || !state.molecule || state.chatBusy) return;
   const history = state.chat.filter((c) => !c.pending).slice(-10).map((c) => ({ role: c.role, text: c.text }));
   state.chat.push({ role: "user", text: message });
-  state.chat.push({ role: "coach", text: "Mietin…", pending: true });
+  state.chat.push({ role: "coach", text: t("Mietin…"), pending: true });
   state.chatBusy = true;
   renderDrawerNow();
   let reply: ChatMessage;
   try {
-    const res = await fetch("/api/flow/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, molecule: state.molecule, checklist: state.checklist, persona: state.persona, history }),
+    const data = await post<{ reply: string; commands?: unknown[]; source?: "llm" | "rules"; note?: string }>("/api/flow/chat", {
+      message,
+      molecule: state.molecule,
+      checklist: state.checklist,
+      persona: state.persona,
+      history,
     });
-    const data = (await res.json()) as { reply?: string; commands?: unknown[]; source?: "llm" | "rules"; note?: string; error?: string };
-    if (!res.ok || typeof data.reply !== "string") throw new Error(data.error ?? `HTTP ${res.status}`);
-    const applied = runCommands(Array.isArray(data.commands) ? data.commands : []);
+    const applied = runCommands(Array.isArray(data.commands) ? data.commands : [], { source: "coach" });
     reply = { role: "coach", text: data.reply, applied, note: data.note, source: data.source };
   } catch (err) {
-    reply = { role: "coach", text: `Valmentajaan ei saatu yhteyttä (${(err as Error).message}). Malli ei muuttunut.` };
+    reply = { role: "coach", text: t("Valmentajaan ei saatu yhteyttä ({error}). Malli ei muuttunut.", { error: (err as Error).message }) };
   }
   state.chat = state.chat.filter((c) => !c.pending);
   state.chat.push(reply);
@@ -543,36 +700,99 @@ async function sendChat(text: string): Promise<void> {
   $<HTMLInputElement>("#co-input")?.focus();
 }
 
+async function runGenesis(): Promise<void> {
+  const idea = state.onboardingIdea.trim();
+  if (!idea || state.genesisBusy) return;
+  state.genesisBusy = true;
+  renderOnboarding();
+  let molecule: Molecule;
+  let notes: string[] = [];
+  try {
+    const data = await post<{ molecule: Molecule; notes: string[] }>("/api/flow/genesis", { idea });
+    if (!isMolecule(data.molecule)) throw new Error("?");
+    molecule = data.molecule;
+    notes = data.notes ?? [];
+  } catch {
+    // Palvelin ei vastannut: sama sääntöpohjainen tulkki toimii myös selaimessa.
+    const r = ideaToMolecule(idea);
+    molecule = r.molecule;
+    notes = r.notes;
+  }
+  state.genesisBusy = false;
+  state.onboardingIdea = "";
+  startMolecule(molecule);
+  if (notes.length) {
+    state.chat.push({ role: "coach", text: `${t("Rakensin mallin liikeideastasi.")} ${notes.join(" ")}` });
+    save();
+  }
+  showToast(t("Malli rakennettu. Säädä luvut omiksesi vivuista."));
+}
+
+async function createAiWidget(prompt: string): Promise<void> {
+  if (!prompt.trim() || !state.molecule || state.widgetPanel.busy) return;
+  state.widgetPanel = { busy: true, error: null, lastPrompt: prompt };
+  renderDrawerNow();
+  try {
+    const data = await post<{ widgets: unknown[]; error: string | null }>("/api/flow/widget", { prompt, molecule: state.molecule });
+    // Tarkistetaan uudelleen selaimessa: palvelimen vastaukseenkaan ei luoteta sokeasti.
+    const specs = (data.widgets ?? []).map((w) => validateWidget(w, state.molecule!, state.view!, "ai", prompt)).flatMap((v) => (v.spec ? [v.spec] : []));
+    if (specs.length === 0) throw new Error(data.error ?? "?");
+    pushUndo();
+    state.widgets = [...state.widgets, ...specs];
+    state.widgetPanel = { busy: false, error: data.error, lastPrompt: "" };
+    refresh({ persist: true });
+    showToast(t("Widgetti lisätty: {title}", { title: specs.map((x) => x.title).join(", ") }));
+  } catch (err) {
+    state.widgetPanel = { busy: false, error: (err as Error).message, lastPrompt: prompt };
+    renderDrawerNow();
+  }
+}
+
+async function runMarket(query: string): Promise<void> {
+  if (!state.molecule || state.market.busy) return;
+  state.market = { ...state.market, busy: true, error: null, query };
+  renderDrawerNow();
+  try {
+    const data = await post<MarketState["result"] & { error?: string }>("/api/flow/market", { query, molecule: state.molecule });
+    state.market = { busy: false, error: data?.error ?? null, query, result: data };
+  } catch (err) {
+    state.market = { busy: false, error: (err as Error).message, query, result: null };
+  }
+  renderDrawerNow();
+}
+
+async function askAdvisors(question: string): Promise<void> {
+  if (!state.molecule || state.advisors.busy) return;
+  state.advisors = { ...state.advisors, busy: true, question };
+  renderDrawerNow();
+  try {
+    const data = await post<NonNullable<AdvisorsState["result"]>>("/api/flow/advisors", { question, molecule: state.molecule, persona: state.persona });
+    state.advisors = { busy: false, question, result: data };
+  } catch (err) {
+    state.advisors = { busy: false, question, result: { statements: [], consensus: (err as Error).message, proposals: [], source: "rules" } };
+  }
+  renderDrawerNow();
+}
+
 // ---------------------------------------------------------------------------
 // Tiliotteen tuonti (käsitellään vain selaimessa)
 // ---------------------------------------------------------------------------
 
 async function readStatementFile(file: File): Promise<void> {
-  if (file.size > 5 * 1024 * 1024) {
-    state.importData = { analysis: null, selection: { costKeys: [], calibrateRevenue: false, useBalance: false }, error: "Tiedosto on liian suuri (yli 5 Mt)." };
+  const fail = (error: string) => {
+    state.importData = { analysis: null, selection: { costKeys: [], calibrateRevenue: false, useBalance: false, saveActuals: false }, error };
     openDrawer("import");
-    return;
-  }
-  if (/\.pdf$/i.test(file.name)) {
-    state.importData = { analysis: null, selection: { costKeys: [], calibrateRevenue: false, useBalance: false }, error: "PDF-tiliotteita ei vielä tueta." };
-    openDrawer("import");
-    return;
-  }
+  };
+  if (file.size > 5 * 1024 * 1024) return fail(t("Tiedosto on liian suuri (yli 5 Mt)."));
+  if (/\.pdf$/i.test(file.name)) return fail(t("PDF-tiliotteita ei vielä tueta."));
   const buf = await file.arrayBuffer();
   let text = new TextDecoder("utf-8").decode(buf);
-  // Monet pankit vievät CSV:n Latin-1/Windows-1252-merkistössä.
+  // Monet pankit vievät CSV:n Windows-1252-merkistössä.
   if (text.includes("\uFFFD")) text = new TextDecoder("windows-1252").decode(buf);
   const parsed = parseStatementCsv(text);
-  if (parsed.error) {
-    state.importData = { analysis: null, selection: { costKeys: [], calibrateRevenue: false, useBalance: false }, error: parsed.error };
-  } else {
-    const analysis = analyzeStatement(parsed.transactions);
-    state.importData = {
-      analysis,
-      selection: defaultSelection(state.molecule!, analysis),
-      error: null,
-    };
-  }
+  if (parsed.error) return fail(parsed.error);
+  const analysis = analyzeStatement(parsed.transactions);
+  state.importData = { analysis, selection: defaultSelection(state.molecule!, analysis), error: null };
   openDrawer("import");
 }
 
@@ -586,14 +806,14 @@ function play(): void {
   state.playing = true;
   if (state.day >= state.view.sim.days.length - 1) state.day = 0;
   const btn = $("#fl-play");
-  if (btn) btn.textContent = "⏸ Pysäytä";
+  if (btn) btn.textContent = `⏸ ${t("Pysäytä")}`;
   let last = 0;
   let acc = state.day;
   const step = (ts: number) => {
     if (!state.playing || !state.view) return;
     const dt = last ? (ts - last) / 1000 : 0;
     last = ts;
-    acc += dt * 30; // 30 päivää sekunnissa → vuosi 12 sekunnissa
+    acc += dt * 30;
     const max = state.view.sim.days.length - 1;
     state.day = Math.min(max, Math.floor(acc));
     renderTimelineNow();
@@ -610,7 +830,7 @@ function stop(): void {
   state.playing = false;
   cancelAnimationFrame(playRaf);
   const btn = $("#fl-play");
-  if (btn) btn.textContent = "▶ Toista vuosi";
+  if (btn) btn.textContent = `▶ ${t("Toista vuosi")}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -618,10 +838,34 @@ function stop(): void {
 // ---------------------------------------------------------------------------
 
 function parseNullableNumber(raw: string): number | null {
-  const t = raw.trim().replace(",", ".");
-  if (t === "") return null;
-  const n = Number(t);
+  const s = raw.trim().replace(",", ".");
+  if (s === "") return null;
+  const n = Number(s);
   return Number.isFinite(n) ? n : null;
+}
+
+function inputValue(id: string): string {
+  return $<HTMLInputElement>(`#${id}`)?.value ?? "";
+}
+
+function download(name: string, content: string, type: string): void {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function setLocaleAndRerender(l: Locale): void {
+  setLocale(l);
+  save();
+  if (state.molecule) {
+    renderShell();
+    refresh({ levers: true });
+  } else renderOnboarding();
 }
 
 root.addEventListener("click", (ev) => {
@@ -630,8 +874,12 @@ root.addEventListener("click", (ev) => {
   const action = target.dataset.action;
   const m = state.molecule;
   switch (action) {
+    case "set-locale":
+      setLocaleAndRerender(target.dataset.locale as Locale);
+      return;
     case "set-persona":
       state.persona = target.dataset.persona as PersonaId;
+      save();
       renderOnboarding();
       return;
     case "toggle-kind": {
@@ -641,13 +889,14 @@ root.addEventListener("click", (ev) => {
       renderOnboarding();
       return;
     }
+    case "genesis":
+      void runGenesis();
+      return;
     case "start": {
       if (state.onboardingKinds.size === 0) return;
-      let mol = emptyMolecule(state.onboardingName.trim() || "Oma yritys");
+      let mol = emptyMolecule(state.onboardingName.trim() || t("Oma yritys"));
       for (const k of state.onboardingKinds) mol = addAtom(mol, k);
-      if (!mol.atoms.some((a) => a.kind === "TIME_CAPACITY" || a.kind === "PHYSICAL_MATTER")) {
-        mol = { ...mol, credit: { ...mol.credit, customerTermsDays: 0 } };
-      }
+      if (!mol.atoms.some((a) => a.kind === "TIME_CAPACITY" || a.kind === "PHYSICAL_MATTER")) mol = { ...mol, credit: { ...mol.credit, customerTermsDays: 0 } };
       state.onboardingKinds.clear();
       startMolecule(mol);
       return;
@@ -655,14 +904,24 @@ root.addEventListener("click", (ev) => {
     case "preset":
       startMolecule(createPreset(target.dataset.preset as PresetId));
       return;
+    case "task-start": {
+      const id = target.dataset.id!;
+      if (m && !state.task && !confirm(t("Tehtävän aloitus korvaa nykyisen mallin. Jatketaanko?"))) return;
+      const start = taskStart(id);
+      if (!start) return;
+      state.task = { id, start };
+      startMolecule(start, true);
+      openDrawer("tasks");
+      return;
+    }
+    case "task-exit":
+      state.task = null;
+      refresh({ persist: true });
+      return;
     case "reset":
-      if (!confirm("Aloitetaanko alusta? Nykyinen malli, muistilista ja keskustelu poistetaan tästä selaimesta.")) return;
+      if (!confirm(t("Aloitetaanko alusta? Nykyinen malli, muistilista, widgetit, skenaariot ja keskustelu poistetaan tästä selaimesta."))) return;
       stop();
-      state.molecule = null;
-      state.checklist = emptyChecklist();
-      state.chat = [];
-      state.undo = [];
-      state.drawer = null;
+      Object.assign(state, { molecule: null, checklist: emptyChecklist(), chat: [], undo: [], drawer: null, widgets: [], goals: [], scenarios: [], actuals: [], task: null, mc: null });
       save();
       renderOnboarding();
       return;
@@ -674,9 +933,11 @@ root.addEventListener("click", (ev) => {
       root.querySelectorAll<HTMLElement>(".fl-lens-btn").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.lens === state.lens)));
       refresh({ levers: true, persist: true });
       return;
-    case "open":
-      openDrawer(target.dataset.node as PanelId);
+    case "open": {
+      const id = target.dataset.node as PanelId;
+      if (PANELS.includes(id)) openDrawer(id);
       return;
+    }
     case "close-drawer":
       closeDrawer();
       return;
@@ -698,18 +959,6 @@ root.addEventListener("click", (ev) => {
       renderTimelineNow();
       return;
     }
-    case "import-open":
-      $<HTMLInputElement>("#fl-import-file")?.click();
-      return;
-    case "import-apply": {
-      const d = state.importData;
-      if (!d?.analysis || !state.molecule) return;
-      const applied = runCommands(importCommands(state.molecule, d.analysis, d.selection));
-      state.importData = null;
-      closeDrawer();
-      showToast(applied.length ? `Tiliotteelta lisätty: ${applied.length} muutosta. Voit kumota ↶` : "Ei valittuja muutoksia.");
-      return;
-    }
     case "chat-example":
       void sendChat(target.dataset.text ?? "");
       return;
@@ -725,22 +974,24 @@ root.addEventListener("click", (ev) => {
       const insight = state.insights.find((i) => i.id === target.dataset.insight);
       const act = insight?.actions[Number(target.dataset.idx)];
       if (!act) return;
-      const applied = runCommands(act.commands);
-      if (applied.length) showToast(`Muutettu: ${applied.join(" · ")}. Voit kumota ↶`);
+      const applied = runCommands(act.commands, { source: "coach" });
+      if (applied.length) showToast(t("Muutettu: {changes}. Voit kumota ↶", { changes: applied.join(" · ") }));
       return;
     }
+    case "import-open":
+      $<HTMLInputElement>("#fl-import-file")?.click();
+      return;
   }
-  if (!m) return;
+  if (!m || !state.view) return;
   switch (action) {
     case "add-atom":
       setMolecule(addAtom(m, target.dataset.kind as AtomKind), true);
       return;
     case "remove-atom":
-      if (m.atoms.length <= 1) return;
-      setMolecule(removeAtom(m, target.dataset.atom!), true);
+      if (m.atoms.length > 1) setMolecule(removeAtom(m, target.dataset.atom!), true);
       return;
     case "add-fc":
-      setMolecule(addFixedCost(m, { label: "Uusi kulu", amountPerMonth: 100 }));
+      setMolecule(addFixedCost(m, { label: t("Uusi kulu"), amountPerMonth: 100 }));
       return;
     case "remove-fc":
       setMolecule(removeFixedCost(m, target.dataset.id!));
@@ -748,136 +999,326 @@ root.addEventListener("click", (ev) => {
     case "set-terms":
       setMolecule(withCustomerTerms(m, Number(target.dataset.days)), true);
       return;
+    case "import-apply": {
+      const d = state.importData;
+      if (!d?.analysis) return;
+      const applied = runCommands(importCommands(m, d.analysis, d.selection), { source: "import" });
+      if (d.selection.saveActuals) {
+        state.actuals = d.analysis.monthly;
+        save();
+      }
+      state.importData = null;
+      closeDrawer();
+      showToast(applied.length || d.selection.saveActuals ? t("Tiliotteelta lisätty: {n} muutosta. Voit kumota ↶", { n: applied.length }) : t("Ei valittuja muutoksia."));
+      return;
+    }
+    case "actuals-clear":
+      state.actuals = [];
+      save();
+      renderDrawerNow();
+      return;
+    // --- Widgetit ---
+    case "widget-template": {
+      const r = widgetFromTemplate(target.dataset.id!, m, state.view);
+      if (!r.spec) return showToast(r.error);
+      pushUndo();
+      state.widgets = [...state.widgets, r.spec];
+      refresh({ persist: true });
+      return;
+    }
+    case "widget-toggle":
+      pushUndo();
+      state.widgets = state.widgets.map((w) => (w.id === target.dataset.id ? { ...w, enabled: !w.enabled } : w));
+      refresh({ persist: true });
+      return;
+    case "widget-delete":
+      pushUndo();
+      state.widgets = state.widgets.filter((w) => w.id !== target.dataset.id);
+      refresh({ persist: true });
+      return;
+    // --- Skenaariot ---
+    case "scenario-save": {
+      const name = inputValue("sc-name").trim() || t("Skenaario {n}", { n: state.scenarios.length + 1 });
+      state.scenarios = [...state.scenarios, createScenario(name, m)].slice(-10);
+      refresh({ persist: true });
+      showToast(t("Skenaario tallennettu: {name}", { name }));
+      return;
+    }
+    case "scenario-load": {
+      const s = state.scenarios.find((x) => x.id === target.dataset.id);
+      if (s) setMolecule(JSON.parse(JSON.stringify(s.molecule)) as Molecule, true);
+      return;
+    }
+    case "scenario-delete":
+      state.scenarios = state.scenarios.filter((x) => x.id !== target.dataset.id);
+      refresh({ persist: true });
+      return;
+    case "mc-run":
+      state.mc = monteCarlo(m, state.mcRanges, 400, 7);
+      renderDrawerNow();
+      return;
+    // --- Tavoitteet ---
+    case "goal-add":
+      pushUndo();
+      state.goals = [...state.goals, suggestGoal(state.view, target.dataset.metric as GoalMetric)];
+      refresh({ persist: true });
+      return;
+    case "goal-delete":
+      pushUndo();
+      state.goals = state.goals.filter((g) => g.id !== target.dataset.id);
+      refresh({ persist: true });
+      return;
+    // --- Sesongit ja kriisit ---
+    case "season-profile":
+      runCommands([{ type: "set_seasonality", factors: SEASON_PROFILES[target.dataset.id as SeasonProfileId].factors }], { source: "user" });
+      return;
+    case "event-add": {
+      const card = CRISIS_LIBRARY.find((c) => c.id === target.dataset.id);
+      if (!card) return;
+      const month = Number($<HTMLSelectElement>("#ev-month")?.value ?? 2);
+      const e = eventFromCard(card, month);
+      runCommands([{ type: "add_event", event: { ...e, id: undefined } }], { source: "user" });
+      return;
+    }
+    case "event-random": {
+      const r = randomCrisis(Date.now() % 100000);
+      const e = eventFromCard(r.card, r.startMonth);
+      runCommands([{ type: "add_event", event: { ...e, id: undefined } }], { source: "user" });
+      showToast(t("Kriisi: {title}, alkaa kuukautena {month}", { title: e.title, month: e.startMonth + 1 }));
+      return;
+    }
+    case "event-remove":
+      runCommands([{ type: "remove_event", id: target.dataset.id }], { source: "user" });
+      return;
+    // --- Raportti ---
+    case "report-download":
+      download(`${m.name.replace(/[^\p{L}\p{N}]+/gu, "-").toLowerCase() || "apex"}.md`, state.report || buildReport({ molecule: m, checklist: state.checklist, scenarios: state.scenarios }), "text/markdown;charset=utf-8");
+      return;
+    case "report-copy":
+      void navigator.clipboard?.writeText(state.report).then(() => showToast(t("Raportti kopioitu leikepöydälle.")));
+      return;
+    case "report-print": {
+      const w = window.open("", "_blank");
+      if (!w) return;
+      w.document.write(`<!DOCTYPE html><html lang="${getLocale()}"><head><meta charset="utf-8"><title>${esc(m.name)}</title><style>body{font:14px/1.5 system-ui,sans-serif;max-width:880px;margin:30px auto;color:#111}table{border-collapse:collapse;width:100%;margin:8px 0}td,th{border:1px solid #ccc;padding:4px 8px;text-align:left}h2{margin-top:28px;border-bottom:2px solid #0e7490}</style></head><body>${markdownToHtml(state.report)}</body></html>`);
+      w.document.close();
+      w.focus();
+      w.print();
+      return;
+    }
+    // --- Markkinatieto ---
+    case "market-run":
+      void runMarket(inputValue("mk-query"));
+      return;
+    case "market-apply": {
+      const s = state.market.result?.suggestions[Number(target.dataset.idx)];
+      if (!s) return;
+      const applied = runCommands([{ type: "set_atom_field", atomId: s.atomId, field: s.field, value: s.value }], { source: "market", note: s.rationale, url: s.source?.url });
+      if (applied.length) showToast(t("Muutettu: {changes}. Voit kumota ↶", { changes: applied.join(" · ") }));
+      return;
+    }
+    // --- Neuvonantajat ---
+    case "adv-ask":
+      void askAdvisors(inputValue("adv-q"));
+      return;
+    case "adv-apply": {
+      const p = state.advisors.result?.proposals[Number(target.dataset.idx)];
+      if (!p) return;
+      const applied = runCommands(p.commands, { source: "coach" });
+      if (applied.length) showToast(t("Muutettu: {changes}. Voit kumota ↶", { changes: applied.join(" · ") }));
+      return;
+    }
+    case "adv-rule-act": {
+      const adv = ruleAdvisors(m, state.view, state.insights).find((a) => a.role === (target.dataset.role as AdvisorRole));
+      const act = adv?.actions[Number(target.dataset.idx)];
+      if (act) runCommands(act.commands, { source: "coach" });
+      return;
+    }
   }
 });
 
 root.addEventListener("submit", (ev) => {
   const form = ev.target as HTMLFormElement;
-  if (form.id !== "co-form") return;
   ev.preventDefault();
-  const input = $<HTMLInputElement>("#co-input");
-  if (!input) return;
-  const text = input.value;
-  input.value = "";
-  void sendChat(text);
+  if (form.id === "co-form") {
+    const input = $<HTMLInputElement>("#co-input");
+    if (!input) return;
+    const text = input.value;
+    input.value = "";
+    void sendChat(text);
+  } else if (form.id === "wg-form") {
+    void createAiWidget(inputValue("wg-input"));
+  }
 });
 
 root.addEventListener("input", (ev) => {
-  const t = ev.target as HTMLInputElement;
-  if (t.id === "ob-name") {
-    state.onboardingName = t.value;
+  const el = ev.target as HTMLInputElement;
+  if (el.id === "ob-name") {
+    state.onboardingName = el.value;
     return;
   }
-  if (t.id === "fl-day") {
+  if (el.id === "ob-idea") {
+    state.onboardingIdea = (el as unknown as HTMLTextAreaElement).value;
+    return;
+  }
+  if (el.id === "fl-day") {
     stop();
-    state.day = Number(t.value);
+    state.day = Number(el.value);
     renderTimelineNow();
     return;
   }
-  const leverId = t.dataset.lever;
+  const leverId = el.dataset.lever;
   if (leverId && state.molecule) {
     if (!state.leverDragging) {
       pushUndo();
       state.leverDragging = true;
     }
-    state.molecule = applyLever(state.molecule, leverId, Number(t.value));
+    state.molecule = withProvenance(applyLever(state.molecule, leverId, Number(el.value)), [leverId], "user");
     state.stress = null;
     refresh();
   }
 });
 
+root.addEventListener("keydown", (ev) => {
+  const el = ev.target as HTMLElement;
+  if (ev.key !== "Enter") return;
+  if (el.id === "ob-idea" && (ev.metaKey || ev.ctrlKey)) void runGenesis();
+  if (el.id === "sc-name") root.querySelector<HTMLButtonElement>('[data-action="scenario-save"]')?.click();
+  if (el.id === "mk-query") void runMarket((el as HTMLInputElement).value);
+  if (el.id === "adv-q") void askAdvisors((el as HTMLInputElement).value);
+});
+
 root.addEventListener("change", (ev) => {
-  const t = ev.target as HTMLInputElement | HTMLSelectElement;
-  if (t.hasAttribute("data-persona-select")) {
-    state.persona = t.value as PersonaId;
+  const el = ev.target as HTMLInputElement | HTMLSelectElement;
+  if (el.hasAttribute("data-persona-select")) {
+    state.persona = el.value as PersonaId;
     state.lens = personaDef(state.persona).defaultLens;
     save();
     renderShell();
     refresh({ levers: true });
     return;
   }
-  if (t.id === "fl-import-file" && t instanceof HTMLInputElement) {
-    const file = t.files?.[0];
-    t.value = "";
+  if (el.id === "fl-import-file" && el instanceof HTMLInputElement) {
+    const file = el.files?.[0];
+    el.value = "";
     if (file) void readStatementFile(file);
     return;
   }
-  if (state.importData && t instanceof HTMLInputElement) {
+  if (state.importData && el instanceof HTMLInputElement) {
     const sel = state.importData.selection;
-    if (t.dataset.importCost) {
-      const key = t.dataset.importCost;
-      sel.costKeys = t.checked ? [...new Set([...sel.costKeys, key])] : sel.costKeys.filter((k) => k !== key);
+    if (el.dataset.importCost) {
+      const key = el.dataset.importCost;
+      sel.costKeys = el.checked ? [...new Set([...sel.costKeys, key])] : sel.costKeys.filter((k) => k !== key);
       return;
     }
-    if (t.hasAttribute("data-import-calibrate")) {
-      sel.calibrateRevenue = t.checked;
-      return;
-    }
-    if (t.hasAttribute("data-import-balance")) {
-      sel.useBalance = t.checked;
-      return;
-    }
+    if (el.hasAttribute("data-import-calibrate")) return void (sel.calibrateRevenue = el.checked);
+    if (el.hasAttribute("data-import-balance")) return void (sel.useBalance = el.checked);
+    if (el.hasAttribute("data-import-actuals")) return void (sel.saveActuals = el.checked);
   }
   const m = state.molecule;
-  if (!m || !(t instanceof HTMLInputElement)) return;
-  if (t.dataset.lever) {
+  if (!m) return;
+  if (el.hasAttribute("data-start-month")) {
+    runCommands([{ type: "set_start_month", month: Number(el.value) }], { source: "user" });
+    return;
+  }
+  if (!(el instanceof HTMLInputElement)) return;
+  const d = el.dataset;
+  if (d.lever) {
     state.leverDragging = false;
     refresh({ levers: true, persist: true });
     return;
   }
-  if (t.dataset.lpToggle) {
-    const r = toggleItem(m, state.checklist, t.dataset.lpToggle, t.checked);
+  if (d.lpToggle || d.lpParam) {
+    let r;
+    if (d.lpToggle) r = toggleItem(m, state.checklist, d.lpToggle, el.checked);
+    else {
+      const [id, key] = d.lpParam!.split(":");
+      const v = parseNullableNumber(el.value);
+      if (v === null) return;
+      r = setItemParam(m, state.checklist, id, key, v);
+    }
     pushUndo();
     state.checklist = r.checklist;
     state.molecule = r.molecule;
     refresh({ levers: true, persist: true });
     return;
   }
-  if (t.dataset.lpParam) {
-    const [id, key] = t.dataset.lpParam.split(":");
-    const v = parseNullableNumber(t.value);
-    if (v === null) return;
-    const r = setItemParam(m, state.checklist, id, key, v);
+  if (d.widgetEnable) {
     pushUndo();
-    state.checklist = r.checklist;
-    state.molecule = r.molecule;
-    refresh({ levers: true, persist: true });
+    state.widgets = state.widgets.map((w) => (w.id === d.widgetEnable ? { ...w, enabled: el.checked } : w));
+    refresh({ persist: true });
     return;
   }
-  if (t.hasAttribute("data-rename-molecule")) {
-    setMolecule(renameMolecule(m, t.value));
+  if (d.widgetFormula) {
+    pushUndo();
+    state.widgets = state.widgets.map((w) =>
+      w.id !== d.widgetFormula ? w : w.kind === "metric" ? { ...w, formula: el.value, origin: "user" } : w.kind === "alert" ? { ...w, condition: el.value, origin: "user" } : w,
+    );
+    refresh({ persist: true });
     return;
   }
-  if (t.dataset.renameAtom) {
-    setMolecule(renameAtom(m, t.dataset.renameAtom, t.value), true);
+  if (d.scenarioCompare) {
+    state.scenarios = state.scenarios.map((s) => (s.id === d.scenarioCompare ? { ...s, compare: el.checked } : s));
+    refresh({ persist: true });
     return;
   }
-  if (t.dataset.atomField) {
-    const [atomId, field] = t.dataset.atomField.split(":");
-    setMolecule(setAtomField(m, atomId, field, parseNullableNumber(t.value)), true);
-    return;
-  }
-  if (t.dataset.creditField) {
-    const v = parseNullableNumber(t.value);
+  if (d.mcRange) {
+    const v = parseNullableNumber(el.value);
     if (v === null) return;
-    setMolecule({ ...m, credit: { ...m.credit, [t.dataset.creditField]: v } }, true);
+    state.mcRanges = { ...state.mcRanges, [d.mcRange]: Math.max(0, Math.min(90, v)) / 100 };
+    state.mc = null;
+    save();
+    renderDrawerNow();
     return;
   }
-  if (t.dataset.fcField) {
-    const [id, field] = t.dataset.fcField.split(":");
-    const patch = field === "label" ? { label: t.value } : { [field]: parseNullableNumber(t.value) ?? undefined };
+  if (d.goalValue) {
+    const v = parseNullableNumber(el.value);
+    if (v === null) return;
+    pushUndo();
+    state.goals = state.goals.map((g) => (g.id !== d.goalValue ? g : { ...g, value: GOAL_METRICS[g.metric].format === "pct" ? v / 100 : v }));
+    refresh({ persist: true });
+    return;
+  }
+  if (d.seasonMonth !== undefined) {
+    const v = parseNullableNumber(el.value);
+    if (v === null) return;
+    const factors = [...(m.seasonality && m.seasonality.length === 12 ? m.seasonality : SEASON_PROFILES.flat.factors)];
+    factors[Number(d.seasonMonth)] = Math.max(0, Math.min(5, v));
+    runCommands([{ type: "set_seasonality", factors }], { source: "user" });
+    return;
+  }
+  if (d.founder) {
+    const v = parseNullableNumber(el.value);
+    if (v !== null) runCommands([{ type: "set_founder", [d.founder]: v }], { source: "user" });
+    return;
+  }
+  if (el.hasAttribute("data-rename-molecule")) return setMolecule(renameMolecule(m, el.value));
+  if (d.renameAtom) return setMolecule(renameAtom(m, d.renameAtom, el.value), true);
+  if (d.atomField) {
+    const [atomId, field] = d.atomField.split(":");
+    setMolecule(withProvenance(setAtomField(m, atomId, field, parseNullableNumber(el.value)), [d.atomField], "user"), true);
+    return;
+  }
+  if (d.creditField) {
+    const v = parseNullableNumber(el.value);
+    if (v !== null) setMolecule(withProvenance({ ...m, credit: { ...m.credit, [d.creditField]: v } }, [`credit:${d.creditField}`], "user"), true);
+    return;
+  }
+  if (d.fcField) {
+    const [id, field] = d.fcField.split(":");
+    const patch = field === "label" ? { label: el.value } : { [field]: parseNullableNumber(el.value) ?? undefined };
     setMolecule(updateFixedCost(m, id, patch));
     return;
   }
-  if (t.hasAttribute("data-payroll-day")) {
-    const v = parseNullableNumber(t.value);
+  if (el.hasAttribute("data-payroll-day")) {
+    const v = parseNullableNumber(el.value);
     if (v !== null) setMolecule(setPayrollDay(m, v));
   }
 });
 
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape" && state.drawer) closeDrawer();
-  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "z" && !(ev.target instanceof HTMLInputElement)) {
+  if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "z" && !(ev.target instanceof HTMLInputElement) && !(ev.target instanceof HTMLTextAreaElement)) {
     ev.preventDefault();
     undo();
   }
@@ -888,28 +1329,40 @@ document.addEventListener("keydown", (ev) => {
 // ---------------------------------------------------------------------------
 
 load();
-// Jaettavat esimerkkilinkit: /flow?preset=it_consultant (&open=receivables avaa paneelin, &persona=director).
 const params = new URLSearchParams(location.search);
+const langParam = params.get("lang");
+if (isLocale(langParam)) setLocale(langParam);
+else if (!localStorage.getItem(STORAGE_KEY)) setLocale(navigator.language?.toLowerCase().startsWith("fi") ? "fi" : "en");
+// Jaettavat linkit: ?preset=it_consultant&open=receivables&persona=director&lang=en&task=rescue-cash
 const presetParam = params.get("preset");
 const openParam = params.get("open") as PanelId | null;
 const personaParam = params.get("persona") as PersonaId | null;
+const taskParam = params.get("task");
 if (personaParam && PERSONAS.some((p) => p.id === personaParam)) {
   state.persona = personaParam;
   state.lens = personaDef(personaParam).defaultLens;
 }
 if (presetParam && presetParam in PRESET_LABELS) {
-  state.molecule = createPreset(presetParam as PresetId);
-  state.checklist = emptyChecklist();
-  state.chat = [];
+  Object.assign(state, { molecule: createPreset(presetParam as PresetId), checklist: emptyChecklist(), chat: [], widgets: [], goals: [], scenarios: [], actuals: [], task: null });
   state.lens = personaDef(state.persona).defaultLens;
-  save();
 }
-if (presetParam || personaParam || openParam) history.replaceState(null, "", location.pathname);
+if (taskParam && TASKS.some((d) => d.id === taskParam)) {
+  const start = taskStart(taskParam)!;
+  Object.assign(state, { molecule: start, checklist: emptyChecklist(), task: { id: taskParam, start } });
+}
+if (presetParam || personaParam || openParam || langParam || taskParam) history.replaceState(null, "", location.pathname);
+save();
+void fetch("/api/flow/status")
+  .then((r) => r.json())
+  .then((s: { llm?: boolean }) => {
+    state.llm = !!s.llm;
+    if (!state.molecule) renderOnboarding();
+  })
+  .catch(() => undefined);
 if (state.molecule) {
   renderShell();
   refresh({ levers: true });
-  const panels: PanelId[] = ["demand", "capacity", "receivables", "cash", "costs", "launchpad", "coach"];
-  if (openParam && panels.includes(openParam)) openDrawer(openParam);
+  if (openParam && PANELS.includes(openParam)) openDrawer(openParam);
   else play();
 } else {
   renderOnboarding();

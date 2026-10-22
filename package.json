@@ -2,13 +2,15 @@
   "name": "apex",
   "version": "1.0.0",
   "private": true,
-  "description": "APEX — AAA multi-agent business case simulator & strategy engine",
+  "description": "APEX Studio — liiketoiminnan simulaattori ja yritysvalmentaja",
   "type": "module",
   "scripts": {
     "dev": "node --no-warnings --import ./scripts/register-loader.mjs src/app/server.ts",
     "start": "node --no-warnings --import ./scripts/register-loader.mjs src/app/server.ts",
     "sim": "node --no-warnings --import ./scripts/register-loader.mjs scripts/simulate.ts",
-    "test": "node --no-warnings --import ./scripts/register-loader.mjs --test tests/engine.test.ts tests/llm.test.ts tests/flow-*.test.ts"
+    "test": "node --no-warnings --import ./scripts/register-loader.mjs --test tests/engine.test.ts tests/llm.test.ts tests/flow-*.test.ts",
+    "i18n": "node --no-warnings --import ./scripts/register-loader.mjs scripts/i18n.ts",
+    "i18n:translate": "node --no-warnings --import ./scripts/register-loader.mjs scripts/i18n.ts translate"
   },
   "dependencies": {
     "zod": "^4.3.6"

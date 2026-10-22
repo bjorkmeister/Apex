@@ -13,15 +13,17 @@ import type { Molecule } from "../kernel/types.ts";
 import { addFixedCost, removeFixedCost } from "./edit.ts";
 import { withCustomerTerms } from "../kernel/sensitivity.ts";
 import type { FlowView, NodeId } from "./view.ts";
+import { msg, t } from "../i18n/index.ts";
+import { provKey, withProvenance } from "./provenance.ts";
 
 export type LaunchStep = 1 | 2 | 3 | 4 | 5;
 
 export const STEP_TITLES: Record<LaunchStep, string> = {
-  1: "Liikeidea",
-  2: "Hinnoittelu ja kannattavuus",
-  3: "Hallinto ja lakisääteiset asiat",
-  4: "Asiakkaat ja maksuehdot",
-  5: "Valmis käynnistykseen",
+  1: msg("Liikeidea"),
+  2: msg("Hinnoittelu ja kannattavuus"),
+  3: msg("Hallinto ja lakisääteiset asiat"),
+  4: msg("Asiakkaat ja maksuehdot"),
+  5: msg("Valmis käynnistykseen"),
 };
 
 export interface ParamDef {
@@ -73,85 +75,85 @@ export const CHECKLIST: ItemDef[] = [
   {
     id: "idea",
     step: 1,
-    title: "Kuvaa, mitä myyt ja kenelle",
-    why: "Kun tiedät, kuka maksaa ja mistä, tiedät myös mitä virtoja mallissa tarvitaan.",
+    title: msg("Kuvaa, mitä myyt ja kenelle"),
+    why: msg("Kun tiedät, kuka maksaa ja mistä, tiedät myös mitä virtoja mallissa tarvitaan."),
     mode: "auto",
     open: "demand",
   },
   {
     id: "own-salary",
     step: 2,
-    title: "Päätä oma palkkasi",
-    why: "Yritys, joka ei maksa tekijälleen palkkaa, ei ole vielä kannattava – se vain näyttää siltä.",
+    title: msg("Päätä oma palkkasi"),
+    why: msg("Yritys, joka ei maksa tekijälleen palkkaa, ei ole vielä kannattava – se vain näyttää siltä."),
     mode: "auto",
     open: "costs",
   },
   {
     id: "break-even",
     step: 2,
-    title: "Hinnoittele niin, että kannattavuusraja jää selvästi alle myynnin",
-    why: "Vähintään 20 %:n pelivara tarkoittaa, että yksi huono kuukausi ei kaada yritystä.",
+    title: msg("Hinnoittele niin, että kannattavuusraja jää selvästi alle myynnin"),
+    why: msg("Vähintään 20 %:n pelivara tarkoittaa, että yksi huono kuukausi ei kaada yritystä."),
     mode: "auto",
     open: "demand",
   },
   {
     id: "company-form",
     step: 3,
-    title: "Valitse yritysmuoto ja tee perustamisilmoitus (Y-tunnus)",
-    why: "Toiminimi on nopein aloittaa, osakeyhtiö erottaa omat ja yrityksen rahat. Perustamismaksu maksetaan heti, joten se pienentää alkukassaa.",
+    title: msg("Valitse yritysmuoto ja tee perustamisilmoitus (Y-tunnus)"),
+    why: msg("Toiminimi on nopein aloittaa, osakeyhtiö erottaa omat ja yrityksen rahat. Perustamismaksu maksetaan heti, joten se pienentää alkukassaa."),
     mode: "manual",
-    params: [{ key: "fee", label: "Perustamismaksu", unit: "€", default: 75, step: 5 }],
-    source: "PRH / YTJ: ajantasaiset käsittelymaksut (toiminimi ja osakeyhtiö eroavat)",
+    params: [{ key: "fee", label: msg("Perustamismaksu"), unit: msg("€"), default: 75, step: 5 }],
+    source: msg("PRH / YTJ: ajantasaiset käsittelymaksut (toiminimi ja osakeyhtiö eroavat)"),
   },
   {
     id: "yel",
     step: 3,
-    title: "Ota yrittäjän eläkevakuutus (YEL)",
-    why: "YEL on pakollinen, kun työtulosi ylittää alarajan. Se on myös sosiaaliturvasi perusta: sairauspäiväraha ja eläke lasketaan YEL-työtulosta.",
+    title: msg("Ota yrittäjän eläkevakuutus (YEL)"),
+    why: msg("YEL on pakollinen, kun työtulosi ylittää alarajan. Se on myös sosiaaliturvasi perusta: sairauspäiväraha ja eläke lasketaan YEL-työtulosta."),
     mode: "manual",
     params: [
-      { key: "income", label: "YEL-työtulo", unit: "€ / v", default: 15000, step: 500 },
-      { key: "rate", label: "Maksuprosentti", unit: "%", default: 24.4, step: 0.1 },
-      { key: "discount", label: "Aloittavan alennus", unit: "%", default: 22, step: 1 },
+      { key: "income", label: msg("YEL-työtulo"), unit: msg("€ / v"), default: 15000, step: 500 },
+      { key: "rate", label: msg("Maksuprosentti"), unit: msg("%"), default: 24.4, step: 0.1 },
+      { key: "discount", label: msg("Aloittavan alennus"), unit: msg("%"), default: 22, step: 1 },
     ],
-    source: "Eläkeyhtiö tai Työeläke.fi: vuoden maksuprosentti ja alkavan yrittäjän alennus (48 kk)",
+    source: msg("Eläkeyhtiö tai Työeläke.fi: vuoden maksuprosentti ja alkavan yrittäjän alennus (48 kk)"),
   },
   {
     id: "accounting",
     step: 3,
-    title: "Järjestä kirjanpito",
-    why: "Kirjanpito on lakisääteinen. Tilitoimisto maksaa, mutta säästää aikaa ja virheitä.",
+    title: msg("Järjestä kirjanpito"),
+    why: msg("Kirjanpito on lakisääteinen. Tilitoimisto maksaa, mutta säästää aikaa ja virheitä."),
     mode: "manual",
-    params: [{ key: "amount", label: "Kirjanpito", unit: "€ / kk", default: 150, step: 10 }],
+    params: [{ key: "amount", label: msg("Kirjanpito"), unit: msg("€ / kk"), default: 150, step: 10 }],
   },
   {
     id: "insurance",
     step: 3,
-    title: "Hanki yritysvakuutukset",
-    why: "Vastuuvakuutus suojaa, jos työssäsi sattuu virhe. Monet asiakkaat vaativat sen.",
+    title: msg("Hanki yritysvakuutukset"),
+    why: msg("Vastuuvakuutus suojaa, jos työssäsi sattuu virhe. Monet asiakkaat vaativat sen."),
     mode: "manual",
-    params: [{ key: "amount", label: "Vakuutukset", unit: "€ / kk", default: 40, step: 5 }],
+    params: [{ key: "amount", label: msg("Vakuutukset"), unit: msg("€ / kk"), default: 40, step: 5 }],
   },
   {
     id: "vat",
     step: 3,
-    title: "Selvitä arvonlisäverovelvollisuus",
-    why: `Jos liikevaihtosi ylittää ${VAT_THRESHOLD_EUR.toLocaleString("fi-FI")} € tilikaudessa, rekisteröidy ALV-velvolliseksi. APEX laskee hinnat ilman arvonlisäveroa: muista lisätä vero asiakkaan hintaan.`,
+    title: msg("Selvitä arvonlisäverovelvollisuus"),
+    why: msg("Jos liikevaihtosi ylittää {threshold} € tilikaudessa, rekisteröidy ALV-velvolliseksi. APEX laskee hinnat ilman arvonlisäveroa: muista lisätä vero asiakkaan hintaan."),
     mode: "manual",
-    source: "Verohallinto: ALV-velvollisuuden alaraja ja ilmoitusaikataulu",
+    source: msg("Verohallinto: ALV-velvollisuuden alaraja ja ilmoitusaikataulu"),
   },
   {
     id: "bank",
     step: 3,
-    title: "Avaa yritykselle oma pankkitili",
-    why: "Erillinen tili pitää yrityksen ja omat rahat erillään – ja kassan seuranta helpottuu.",
+    title: msg("Avaa yritykselle oma pankkitili"),
+    why: msg("Erillinen tili pitää yrityksen ja omat rahat erillään – ja kassan seuranta helpottuu."),
     mode: "manual",
   },
   {
     id: "terms",
     step: 4,
-    title: "Sovi lyhyt maksuehto (14 pv)",
-    why: "Lyhyt maksuaika tuo rahat kassaan ennen kuin omat laskusi erääntyvät.",
+    title: msg("Sovi lyhyt maksuehto (14 pv)"),
+    why: msg("Lyhyt maksuaika tuo rahat kassaan ennen kuin omat laskusi erääntyvät."),
     mode: "manual",
     relevant: (m) => invoiced(m),
     open: "receivables",
@@ -159,16 +161,16 @@ export const CHECKLIST: ItemDef[] = [
   {
     id: "first-customers",
     step: 4,
-    title: "Varmista ensimmäiset asiakkaat",
-    why: "Arvio kysynnästä muuttuu todeksi vasta, kun joku sitoutuu ostamaan. Syötä varmistettu kysyntä malliin.",
+    title: msg("Varmista ensimmäiset asiakkaat"),
+    why: msg("Arvio kysynnästä muuttuu todeksi vasta, kun joku sitoutuu ostamaan. Syötä varmistettu kysyntä malliin."),
     mode: "auto",
     open: "demand",
   },
   {
     id: "buffer",
     step: 5,
-    title: "Varmista kassapuskuri: kassa ei mene miinukselle",
-    why: "Kun kassa riittää koko vuoden ja pohjallakin on vähintään kuukauden kiinteät kulut, yritys kestää yllätyksiä.",
+    title: msg("Varmista kassapuskuri: kassa ei mene miinukselle"),
+    why: msg("Kun kassa riittää koko vuoden ja pohjallakin on vähintään kuukauden kiinteät kulut, yritys kestää yllätyksiä."),
     mode: "auto",
     open: "cash",
   },
@@ -177,7 +179,7 @@ export const CHECKLIST: ItemDef[] = [
 /** Molekyylissä on vähintään yksi kiinteä kulu tai palkka, joka kuvaa omaa palkkaa. */
 function hasOwnSalary(m: Molecule): boolean {
   const time = m.atoms.some((a) => a.enabled && a.kind === "TIME_CAPACITY" && a.salaryPerPersonMonth > 0);
-  const listed = m.fixedCosts.some((c) => /palkka|nosto/i.test(c.label) && c.amountPerMonth > 0);
+  const listed = m.fixedCosts.some((c) => /palkka|nosto|salary|draw/i.test(c.label) && c.amountPerMonth > 0);
   return time || listed;
 }
 
@@ -214,14 +216,14 @@ export function yelMonthly(income: number, ratePct: number, discountPct: number)
 export function effectLabel(id: string, params: Record<string, number>): string | null {
   switch (id) {
     case "company-form":
-      return `alkukassa −${Math.round(params.fee)} €`;
+      return t("alkukassa −{amount} €", { amount: Math.round(params.fee) });
     case "yel":
-      return `+${Math.round(yelMonthly(params.income, params.rate, params.discount))} € / kk kuluihin`;
+      return t("+{amount} € / kk kuluihin", { amount: Math.round(yelMonthly(params.income, params.rate, params.discount)) });
     case "accounting":
     case "insurance":
-      return `+${Math.round(params.amount)} € / kk kuluihin`;
+      return t("+{amount} € / kk kuluihin", { amount: Math.round(params.amount) });
     case "terms":
-      return "asiakkaan maksuaika 14 pv";
+      return t("asiakkaan maksuaika 14 pv");
     default:
       return null;
   }
@@ -234,13 +236,13 @@ function applyEffect(m: Molecule, id: string, params: Record<string, number>, pr
     case "company-form": {
       const fee = Math.max(0, params.fee);
       const already = prev?.undo?.fee ?? 0;
-      return { m: { ...m, credit: { ...m.credit, openingCash: m.credit.openingCash + already - fee } }, undo: { fee } };
+      return { m: withProvenance({ ...m, credit: { ...m.credit, openingCash: m.credit.openingCash + already - fee } }, [provKey("credit", "openingCash")], "launchpad"), undo: { fee } };
     }
     case "yel":
       return {
         m: addFixedCost(m, {
           id: fcId(id),
-          label: "YEL-vakuutus",
+          label: t("YEL-vakuutus"),
           amountPerMonth: yelMonthly(params.income, params.rate, params.discount),
           category: "pension",
           dayOfMonth: 20,
@@ -248,12 +250,12 @@ function applyEffect(m: Molecule, id: string, params: Record<string, number>, pr
         }),
       };
     case "accounting":
-      return { m: addFixedCost(m, { id: fcId(id), label: "Kirjanpito", amountPerMonth: params.amount, category: "admin", dayOfMonth: 5, source: "launchpad" }) };
+      return { m: addFixedCost(m, { id: fcId(id), label: t("Kirjanpito"), amountPerMonth: params.amount, category: "admin", dayOfMonth: 5, source: "launchpad" }) };
     case "insurance":
-      return { m: addFixedCost(m, { id: fcId(id), label: "Yritysvakuutukset", amountPerMonth: params.amount, category: "insurance", dayOfMonth: 1, source: "launchpad" }) };
+      return { m: addFixedCost(m, { id: fcId(id), label: t("Yritysvakuutukset"), amountPerMonth: params.amount, category: "insurance", dayOfMonth: 1, source: "launchpad" }) };
     case "terms": {
       const previous = prev?.undo?.terms ?? m.credit.customerTermsDays;
-      return { m: withCustomerTerms(m, Math.min(14, previous)), undo: { terms: previous } };
+      return { m: withProvenance(withCustomerTerms(m, Math.min(14, previous)), [provKey("credit", "customerTermsDays")], "launchpad"), undo: { terms: previous } };
     }
     default:
       return { m };
@@ -335,14 +337,14 @@ export function checklistView(m: Molecule, v: FlowView, cl: ChecklistState): Che
     let note: string | null = null;
     let status: ItemStatus = checked ? "done" : "todo";
     if (def.id === "vat" && v.monthlyRevenue * 12 > VAT_THRESHOLD_EUR) {
-      note = `Mallisi vuosimyynti on noin ${Math.round(v.monthlyRevenue * 12).toLocaleString("fi-FI")} € – ALV-rekisteröinti on todennäköisesti pakollinen.`;
+      note = t("Mallisi vuosimyynti on noin {amount} € – ALV-rekisteröinti on todennäköisesti pakollinen.", { amount: Math.round(v.monthlyRevenue * 12) });
       if (!checked) status = "attention";
     }
     if (def.id === "own-salary" && !checked && !hasTimeAtom(m)) {
-      note = "Lisää kuluihin kiinteä kulu nimeltä \"Oma palkka\".";
+      note = t("Lisää kuluihin kiinteä kulu nimeltä \"Oma palkka\".");
     }
     if (def.id === "buffer" && !checked && v.sim.cashOutDay !== null) {
-      note = `Kassa loppuu nyt päivänä ${v.sim.cashOutDay + 1}.`;
+      note = t("Kassa loppuu nyt päivänä {day}.", { day: v.sim.cashOutDay + 1 });
       status = "attention";
     }
     items.push({ def, status, checked, params, effect: def.mode === "manual" ? effectLabel(def.id, params) : null, note });

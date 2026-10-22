@@ -8,6 +8,7 @@
  */
 import type { FixedCost, FixedCostCategory, Molecule } from "../kernel/types.ts";
 import type { FlowCommand } from "./commands.ts";
+import { t } from "../i18n/index.ts";
 
 export interface Transaction {
   date: string; // YYYY-MM-DD
@@ -89,7 +90,7 @@ const findCol = (headers: string[], patterns: RegExp[], exclude: number[] = []):
 
 export function parseStatementCsv(text: string): ParseResult {
   const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter((l) => l.trim().length > 0);
-  if (lines.length < 2) return { transactions: [], skippedRows: 0, error: "Tiedostossa ei ole tapahtumia.", columns: null };
+  if (lines.length < 2) return { transactions: [], skippedRows: 0, error: t("Tiedostossa ei ole tapahtumia."), columns: null };
   // Otsikkorivi: ensimmäinen rivi, jossa on päivämäärä- ja summasarake.
   let headerIdx = -1;
   let delim = ";";
@@ -105,7 +106,7 @@ export function parseStatementCsv(text: string): ParseResult {
     }
   }
   if (headerIdx < 0) {
-    return { transactions: [], skippedRows: lines.length, error: "Tiliotteen sarakkeita ei tunnistettu. Tarvitaan ainakin päivämäärä- ja summasarake.", columns: null };
+    return { transactions: [], skippedRows: lines.length, error: t("Tiliotteen sarakkeita ei tunnistettu. Tarvitaan ainakin päivämäärä- ja summasarake."), columns: null };
   }
   const dateCol = findCol(headers, [/kirjausp/, /arvop/, /maksup/, /päiv|date|pvm/]);
   const amountCol = findCol(headers, [/määrä/, /summa/, /amount/, /belopp/, /euro|eur\b/]);
@@ -125,7 +126,7 @@ export function parseStatementCsv(text: string): ParseResult {
     transactions.push({
       date,
       amount,
-      counterparty: (cpCol >= 0 ? cells[cpCol] : "") || (msgCol >= 0 ? cells[msgCol] : "") || "Tuntematon",
+      counterparty: (cpCol >= 0 ? cells[cpCol] : "") || (msgCol >= 0 ? cells[msgCol] : "") || t("Tuntematon"),
       message: msgCol >= 0 ? cells[msgCol] ?? "" : "",
       balance: balanceCol >= 0 ? parseAmount(cells[balanceCol] ?? "") : null,
     });
@@ -134,7 +135,7 @@ export function parseStatementCsv(text: string): ParseResult {
   return {
     transactions,
     skippedRows: skipped,
-    error: transactions.length === 0 ? "Tapahtumia ei voitu lukea." : null,
+    error: transactions.length === 0 ? t("Tapahtumia ei voitu lukea.") : null,
     columns: {
       date: headers[dateCol],
       amount: headers[amountCol],
@@ -147,7 +148,7 @@ export function parseStatementCsv(text: string): ParseResult {
 
 const CATEGORY_RULES: { re: RegExp; category: FixedCostCategory; label?: string }[] = [
   { re: /vuokra|rent|kiinteistö|toimitila|coworking|workspace/, category: "rent" },
-  { re: /ilmarinen|varma|elo\b|veritas|yel|eläke/, category: "pension", label: "YEL-vakuutus" },
+  { re: /ilmarinen|varma|elo\b|veritas|yel|eläke/, category: "pension", label: "YEL" },
   { re: /vakuutus|if vahinko|if p&c|lähitapiola|pohjola vakuutus|fennia|turva|insurance/, category: "insurance" },
   { re: /tilitoimisto|kirjanpito|accountor|procountor|netvisor|holvi|tilipalvelu/, category: "admin" },
   { re: /google ads|facebook|meta platforms|linkedin|mainos|markkinointi|instagram|tiktok/, category: "marketing" },
@@ -167,6 +168,16 @@ export interface RecurringCost {
   category: FixedCostCategory;
 }
 
+export interface MonthlyActual {
+  /** Kalenterikuukausi muodossa YYYY-MM. */
+  month: string;
+  income: number;
+  /** Liiketoiminnan menot (ilman veroja, omia siirtoja ja nostoja). */
+  expenses: number;
+  nonOperating: number;
+  endBalance: number | null;
+}
+
 export interface StatementAnalysis {
   from: string;
   to: string;
@@ -180,6 +191,7 @@ export interface StatementAnalysis {
   oneOffTotal: number;
   nonOperatingTotal: number;
   lastBalance: number | null;
+  monthly: MonthlyActual[];
 }
 
 const normKey = (s: string) =>
@@ -187,7 +199,7 @@ const normKey = (s: string) =>
 
 function titleCase(s: string): string {
   const t = s.trim().replace(/\s+/g, " ");
-  return t.length ? t.charAt(0).toUpperCase() + t.slice(1, 60) : "Kulu";
+  return t.length ? t.charAt(0).toUpperCase() + t.slice(1, 60) : "–";
 }
 
 export function analyzeStatement(tx: Transaction[]): StatementAnalysis {
@@ -222,7 +234,7 @@ export function analyzeStatement(tx: Transaction[]): StatementAnalysis {
     const rule = CATEGORY_RULES.find((r) => r.re.test(text));
     recurring.push({
       key,
-      label: rule?.label ?? titleCase(list[0].counterparty || list[0].message),
+      label: rule?.label === "YEL" ? t("YEL-vakuutus") : titleCase(list[0].counterparty || list[0].message),
       monthlyAmount: total / span,
       dayOfMonth: Math.min(30, days[Math.floor(days.length / 2)] || 1),
       occurrences: list.length,
@@ -232,6 +244,20 @@ export function analyzeStatement(tx: Transaction[]): StatementAnalysis {
   }
   recurring.sort((a, b) => b.monthlyAmount - a.monthlyAmount);
   const withBalance = tx.filter((t) => t.balance !== null);
+  const monthly: MonthlyActual[] = months.map((mo) => {
+    const inMonth = tx.filter((x) => x.date.startsWith(mo));
+    let income = 0;
+    let expenses = 0;
+    let nonOp = 0;
+    for (const x of inMonth) {
+      const nonOperating = NON_OPERATING.test(`${x.counterparty} ${x.message}`.toLowerCase());
+      if (nonOperating) nonOp += Math.abs(x.amount);
+      else if (x.amount > 0) income += x.amount;
+      else expenses += -x.amount;
+    }
+    const withBal = inMonth.filter((x) => x.balance !== null);
+    return { month: mo, income, expenses, nonOperating: nonOp, endBalance: withBal.length ? withBal[withBal.length - 1].balance : null };
+  });
   return {
     from: tx[0]?.date ?? "",
     to: tx[tx.length - 1]?.date ?? "",
@@ -245,6 +271,7 @@ export function analyzeStatement(tx: Transaction[]): StatementAnalysis {
     oneOffTotal: oneOff,
     nonOperatingTotal: nonOperating,
     lastBalance: withBalance.length ? withBalance[withBalance.length - 1].balance : null,
+    monthly,
   };
 }
 
@@ -269,6 +296,7 @@ export function defaultSelection(m: Molecule, a: StatementAnalysis): ImportSelec
     costKeys: a.recurring.filter((r) => !similarExistingCost(m, r)).map((r) => r.key),
     calibrateRevenue: false,
     useBalance: a.lastBalance !== null && a.lastBalance >= 0,
+    saveActuals: a.monthly.length > 0,
   };
 }
 
@@ -279,6 +307,8 @@ export interface ImportSelection {
   calibrateRevenue: boolean;
   /** Asetetaanko alkukassaksi tiliotteen viimeinen saldo. */
   useBalance: boolean;
+  /** Tallennetaanko kuukausitoteumat vertailua varten. */
+  saveActuals: boolean;
 }
 
 /** Kalibroinnin kohde: kenttä ja arvo, jolla mallin myynti vastaa tiliotteen keskimyyntiä. */
@@ -288,14 +318,14 @@ export function revenueCalibration(m: Molecule, targetMonthly: number): { atomId
   const a = atoms[0];
   switch (a.kind) {
     case "TIME_CAPACITY":
-      return a.hourlyRate > 0 ? { atomId: a.id, field: "demandHoursPerMonth", value: Math.round(targetMonthly / a.hourlyRate), label: "myyty kysyntä (h / kk)" } : null;
+      return a.hourlyRate > 0 ? { atomId: a.id, field: "demandHoursPerMonth", value: Math.round(targetMonthly / a.hourlyRate), label: t("myyty kysyntä (h / kk)") } : null;
     case "PHYSICAL_MATTER":
-      return a.unitPrice > 0 ? { atomId: a.id, field: "unitsPerMonth", value: Math.round(targetMonthly / a.unitPrice), label: "myynti kpl / kk" } : null;
+      return a.unitPrice > 0 ? { atomId: a.id, field: "unitsPerMonth", value: Math.round(targetMonthly / a.unitPrice), label: t("myynti kpl / kk") } : null;
     case "RECURRING_SUB":
-      return a.pricePerMonth > 0 ? { atomId: a.id, field: "startingSubscribers", value: Math.round(targetMonthly / a.pricePerMonth), label: "asiakkaat alussa" } : null;
+      return a.pricePerMonth > 0 ? { atomId: a.id, field: "startingSubscribers", value: Math.round(targetMonthly / a.pricePerMonth), label: t("asiakkaat alussa") } : null;
     case "TRANSACTIONAL_TRADE": {
       const perVisitor = a.conversionRate * a.averageTicket * a.openDaysPerMonth;
-      return perVisitor > 0 ? { atomId: a.id, field: "visitorsPerDay", value: Math.round(targetMonthly / perVisitor), label: "ohikulkijat / pv" } : null;
+      return perVisitor > 0 ? { atomId: a.id, field: "visitorsPerDay", value: Math.round(targetMonthly / perVisitor), label: t("ohikulkijat / pv") } : null;
     }
   }
 }

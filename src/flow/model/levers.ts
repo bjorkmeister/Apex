@@ -5,6 +5,7 @@
  * ilmestyvät automaattisesti, eikä käyttöliittymään tarvita toimialakohtaista koodia.
  */
 import type { AtomKind, Molecule, RevenueAtom } from "../kernel/types.ts";
+import { msg, t } from "../i18n/index.ts";
 
 export type LeverFormat = "eur" | "pct" | "int" | "num" | "days";
 
@@ -12,7 +13,9 @@ export interface Lever {
   id: string;
   atomId: string | null;
   field: string;
+  /** Käännösavain (näytetään `t(label)`). */
   label: string;
+  /** Käännösavain (näytetään `t(hint)`). */
   hint: string;
   format: LeverFormat;
   min: number;
@@ -39,42 +42,42 @@ const grow = (floor: number) => (v: number) => Math.max(floor, Math.ceil((v * 3)
 
 const SPECS: Record<AtomKind, FieldSpec[]> = {
   TIME_CAPACITY: [
-    { field: "hourlyRate", label: "Tuntihinta", hint: "Laskutettava hinta tunnilta (alv 0 %)", format: "eur", min: 10, max: grow(50), step: 1, primary: true },
-    { field: "utilization", label: "Laskutusaste", hint: "Osuus työajasta, jonka saat laskutettua", format: "pct", min: 0.05, max: () => 1, step: 0.01, primary: true },
-    { field: "people", label: "Tekijöitä", hint: "Laskuttavat henkilöt", format: "int", min: 1, max: grow(10), step: 1, primary: true },
-    { field: "salaryPerPersonMonth", label: "Palkka / hlö / kk", hint: "Yksinyrittäjällä oma nosto", format: "eur", min: 0, max: grow(2000), step: 50, primary: false },
-    { field: "sideCostRate", label: "Sivukulut", hint: "Työnantajan sivukulut palkan päälle", format: "pct", min: 0, max: () => 0.4, step: 0.01, primary: false },
-    { field: "hoursPerWeek", label: "Työtunnit / viikko", hint: "Henkilön kokonaistyöaika", format: "num", min: 5, max: () => 70, step: 0.5, primary: false },
-    { field: "variableCostPerHour", label: "Muuttuva kulu / h", hint: "Esim. alihankinta tai lisenssi tunnilta", format: "eur", min: 0, max: grow(50), step: 1, primary: false },
+    { field: "hourlyRate", label: msg("Tuntihinta"), hint: msg("Laskutettava hinta tunnilta (alv 0 %)"), format: "eur", min: 10, max: grow(50), step: 1, primary: true },
+    { field: "utilization", label: msg("Laskutusaste"), hint: msg("Osuus työajasta, jonka saat laskutettua"), format: "pct", min: 0.05, max: () => 1, step: 0.01, primary: true },
+    { field: "people", label: msg("Tekijöitä"), hint: msg("Laskuttavat henkilöt"), format: "int", min: 1, max: grow(10), step: 1, primary: true },
+    { field: "salaryPerPersonMonth", label: msg("Palkka / hlö / kk"), hint: msg("Yksinyrittäjällä oma nosto"), format: "eur", min: 0, max: grow(2000), step: 50, primary: false },
+    { field: "sideCostRate", label: msg("Sivukulut"), hint: msg("Työnantajan sivukulut palkan päälle"), format: "pct", min: 0, max: () => 0.4, step: 0.01, primary: false },
+    { field: "hoursPerWeek", label: msg("Työtunnit / viikko"), hint: msg("Henkilön kokonaistyöaika"), format: "num", min: 5, max: () => 70, step: 0.5, primary: false },
+    { field: "variableCostPerHour", label: msg("Muuttuva kulu / h"), hint: msg("Esim. alihankinta tai lisenssi tunnilta"), format: "eur", min: 0, max: grow(50), step: 1, primary: false },
   ],
   PHYSICAL_MATTER: [
-    { field: "unitPrice", label: "Myyntihinta / kpl", hint: "Hinta asiakkaalle (alv 0 %)", format: "eur", min: 0.5, max: grow(50), step: 0.5, primary: true },
-    { field: "unitsPerMonth", label: "Myynti kpl / kk", hint: "Arviosi myyntimäärästä", format: "int", min: 0, max: grow(500), step: 10, primary: true },
-    { field: "unitCost", label: "Ostohinta / kpl", hint: "Mitä yksi kappale maksaa sinulle", format: "eur", min: 0, max: grow(50), step: 0.5, primary: true },
-    { field: "spoilageRate", label: "Hävikki", hint: "Osuus ostetuista, joka pilaantuu tai katoaa", format: "pct", min: 0, max: () => 0.5, step: 0.01, primary: false },
-    { field: "stockCoverDays", label: "Varasto päivinä", hint: "Kuinka monen päivän tavarat pidät varastossa", format: "days", min: 0, max: () => 180, step: 1, primary: false },
+    { field: "unitPrice", label: msg("Myyntihinta / kpl"), hint: msg("Hinta asiakkaalle (alv 0 %)"), format: "eur", min: 0.5, max: grow(50), step: 0.5, primary: true },
+    { field: "unitsPerMonth", label: msg("Myynti kpl / kk"), hint: msg("Arviosi myyntimäärästä"), format: "int", min: 0, max: grow(500), step: 10, primary: true },
+    { field: "unitCost", label: msg("Ostohinta / kpl"), hint: msg("Mitä yksi kappale maksaa sinulle"), format: "eur", min: 0, max: grow(50), step: 0.5, primary: true },
+    { field: "spoilageRate", label: msg("Hävikki"), hint: msg("Osuus ostetuista, joka pilaantuu tai katoaa"), format: "pct", min: 0, max: () => 0.5, step: 0.01, primary: false },
+    { field: "stockCoverDays", label: msg("Varasto päivinä"), hint: msg("Kuinka monen päivän tavarat pidät varastossa"), format: "days", min: 0, max: () => 180, step: 1, primary: false },
   ],
   RECURRING_SUB: [
-    { field: "pricePerMonth", label: "Hinta / kk", hint: "Kuukausimaksu asiakkaalle (alv 0 %)", format: "eur", min: 1, max: grow(100), step: 1, primary: true },
-    { field: "newPerMonth", label: "Uusia asiakkaita / kk", hint: "Arviosi uusista tilaajista", format: "int", min: 0, max: grow(50), step: 1, primary: true },
-    { field: "churnRateMonthly", label: "Poistuma / kk", hint: "Osuus asiakkaista, jotka lopettavat kuukaudessa", format: "pct", min: 0, max: () => 0.3, step: 0.005, primary: true },
-    { field: "cacPerNew", label: "Hankintakulu / asiakas", hint: "Markkinointi ja myynti yhtä uutta asiakasta kohden", format: "eur", min: 0, max: grow(500), step: 5, primary: false },
-    { field: "costPerSubscriberMonth", label: "Kulu / asiakas / kk", hint: "Palvelimet, tuki", format: "eur", min: 0, max: grow(50), step: 0.5, primary: false },
-    { field: "startingSubscribers", label: "Asiakkaita alussa", hint: "Nykyiset tilaajat", format: "int", min: 0, max: grow(100), step: 1, primary: false },
+    { field: "pricePerMonth", label: msg("Hinta / kk"), hint: msg("Kuukausimaksu asiakkaalle (alv 0 %)"), format: "eur", min: 1, max: grow(100), step: 1, primary: true },
+    { field: "newPerMonth", label: msg("Uusia asiakkaita / kk"), hint: msg("Arviosi uusista tilaajista"), format: "int", min: 0, max: grow(50), step: 1, primary: true },
+    { field: "churnRateMonthly", label: msg("Poistuma / kk"), hint: msg("Osuus asiakkaista, jotka lopettavat kuukaudessa"), format: "pct", min: 0, max: () => 0.3, step: 0.005, primary: true },
+    { field: "cacPerNew", label: msg("Hankintakulu / asiakas"), hint: msg("Markkinointi ja myynti yhtä uutta asiakasta kohden"), format: "eur", min: 0, max: grow(500), step: 5, primary: false },
+    { field: "costPerSubscriberMonth", label: msg("Kulu / asiakas / kk"), hint: msg("Palvelimet, tuki"), format: "eur", min: 0, max: grow(50), step: 0.5, primary: false },
+    { field: "startingSubscribers", label: msg("Asiakkaita alussa"), hint: msg("Nykyiset tilaajat"), format: "int", min: 0, max: grow(100), step: 1, primary: false },
   ],
   TRANSACTIONAL_TRADE: [
-    { field: "averageTicket", label: "Keskiostos", hint: "Keskimääräinen ostos (alv 0 %)", format: "eur", min: 0.5, max: grow(20), step: 0.1, primary: true },
-    { field: "visitorsPerDay", label: "Ohikulkijat / pv", hint: "Ihmisiä, jotka näkevät myyntipisteesi", format: "int", min: 0, max: grow(500), step: 10, primary: true },
-    { field: "conversionRate", label: "Ostoprosentti", hint: "Osuus ohikulkijoista, joka ostaa", format: "pct", min: 0, max: () => 0.6, step: 0.005, primary: true },
-    { field: "costPerSale", label: "Raaka-aineet / myynti", hint: "Muuttuva kulu yhtä myyntiä kohden", format: "eur", min: 0, max: grow(20), step: 0.1, primary: false },
-    { field: "openDaysPerMonth", label: "Aukiolopäivät / kk", hint: "", format: "int", min: 1, max: () => 30, step: 1, primary: false },
+    { field: "averageTicket", label: msg("Keskiostos"), hint: msg("Keskimääräinen ostos (alv 0 %)"), format: "eur", min: 0.5, max: grow(20), step: 0.1, primary: true },
+    { field: "visitorsPerDay", label: msg("Ohikulkijat / pv"), hint: msg("Ihmisiä, jotka näkevät myyntipisteesi"), format: "int", min: 0, max: grow(500), step: 10, primary: true },
+    { field: "conversionRate", label: msg("Ostoprosentti"), hint: msg("Osuus ohikulkijoista, joka ostaa"), format: "pct", min: 0, max: () => 0.6, step: 0.005, primary: true },
+    { field: "costPerSale", label: msg("Raaka-aineet / myynti"), hint: msg("Muuttuva kulu yhtä myyntiä kohden"), format: "eur", min: 0, max: grow(20), step: 0.1, primary: false },
+    { field: "openDaysPerMonth", label: msg("Aukiolopäivät / kk"), hint: "", format: "int", min: 1, max: () => 30, step: 1, primary: false },
   ],
 };
 
 const CREDIT_SPECS: FieldSpec[] = [
-  { field: "customerTermsDays", label: "Asiakkaan maksuaika", hint: "Kuinka monen päivän päästä laskusi maksetaan", format: "days", min: 0, max: () => 90, step: 1, primary: true },
-  { field: "openingCash", label: "Alkukassa", hint: "Rahaa tilillä aloitushetkellä", format: "eur", min: 0, max: grow(10000), step: 100, primary: false },
-  { field: "supplierTermsDays", label: "Toimittajan maksuaika", hint: "Kuinka pian maksat ostolaskusi", format: "days", min: 0, max: () => 90, step: 1, primary: false },
+  { field: "customerTermsDays", label: msg("Asiakkaan maksuaika"), hint: msg("Kuinka monen päivän päästä laskusi maksetaan"), format: "days", min: 0, max: () => 90, step: 1, primary: true },
+  { field: "openingCash", label: msg("Alkukassa"), hint: msg("Rahaa tilillä aloitushetkellä"), format: "eur", min: 0, max: grow(10000), step: 100, primary: false },
+  { field: "supplierTermsDays", label: msg("Toimittajan maksuaika"), hint: msg("Kuinka pian maksat ostolaskusi"), format: "days", min: 0, max: () => 90, step: 1, primary: false },
 ];
 
 /** Onko molekyylissä laskutettavia virtoja, joihin asiakkaan maksuaika vaikuttaa. */
@@ -118,7 +121,7 @@ export function leversFor(m: Molecule): Lever[] {
     const v = (m.credit as unknown as Record<string, number>)[spec.field];
     const primary = spec.field === "customerTermsDays" ? invoiced : spec.primary;
     if (spec.field === "customerTermsDays" && !invoiced) continue;
-    out.push(specToLever(spec, null, v, "Kassa ja maksuajat", primary));
+    out.push(specToLever(spec, null, v, t("Kassa ja maksuajat"), primary));
   }
   return out;
 }

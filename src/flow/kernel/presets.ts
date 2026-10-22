@@ -15,6 +15,7 @@ import type {
   TimeCapacityAtom,
   TransactionalTradeAtom,
 } from "./types.ts";
+import { msg, t } from "../i18n/index.ts";
 
 let seq = 0;
 export function newId(prefix: string): string {
@@ -23,10 +24,10 @@ export function newId(prefix: string): string {
 }
 
 export const ATOM_KIND_LABELS: Record<AtomKind, { title: string; hint: string }> = {
-  TIME_CAPACITY: { title: "Myyn aikaa ja osaamista", hint: "Tunnit, projektit, konsultointi, palvelutyö" },
-  PHYSICAL_MATTER: { title: "Myyn tavaraa varastosta", hint: "Tuotteet, raaka-aineet, verkkokauppa, tukku" },
-  RECURRING_SUB: { title: "Myyn kuukausitilauksia", hint: "SaaS, jäsenyydet, ylläpitosopimukset" },
-  TRANSACTIONAL_TRADE: { title: "Myyn tiskiltä ohikulkijoille", hint: "Kioski, kahvila, myymälä, tapahtumat" },
+  TIME_CAPACITY: { title: msg("Myyn aikaa ja osaamista"), hint: msg("Tunnit, projektit, konsultointi, palvelutyö") },
+  PHYSICAL_MATTER: { title: msg("Myyn tavaraa varastosta"), hint: msg("Tuotteet, raaka-aineet, verkkokauppa, tukku") },
+  RECURRING_SUB: { title: msg("Myyn kuukausitilauksia"), hint: msg("SaaS, jäsenyydet, ylläpitosopimukset") },
+  TRANSACTIONAL_TRADE: { title: msg("Myyn tiskiltä ohikulkijoille"), hint: msg("Kioski, kahvila, myymälä, tapahtumat") },
 };
 
 export function createAtom(kind: AtomKind): RevenueAtom {
@@ -35,7 +36,7 @@ export function createAtom(kind: AtomKind): RevenueAtom {
       return {
         id: newId("time"),
         kind,
-        label: "Asiantuntijatyö",
+        label: t("Asiantuntijatyö"),
         enabled: true,
         people: 1,
         hoursPerWeek: 37.5,
@@ -50,7 +51,7 @@ export function createAtom(kind: AtomKind): RevenueAtom {
       return {
         id: newId("matter"),
         kind,
-        label: "Tuotemyynti",
+        label: t("Tuotemyynti"),
         enabled: true,
         unitsPerMonth: 300,
         unitPrice: 30,
@@ -63,7 +64,7 @@ export function createAtom(kind: AtomKind): RevenueAtom {
       return {
         id: newId("sub"),
         kind,
-        label: "Kuukausitilaukset",
+        label: t("Kuukausitilaukset"),
         enabled: true,
         startingSubscribers: 0,
         newPerMonth: 20,
@@ -76,7 +77,7 @@ export function createAtom(kind: AtomKind): RevenueAtom {
       return {
         id: newId("trade"),
         kind,
-        label: "Tiskimyynti",
+        label: t("Tiskimyynti"),
         enabled: true,
         visitorsPerDay: 400,
         conversionRate: 0.1,
@@ -98,7 +99,7 @@ export function fixedCost(
   return { id: newId("fc"), label, amountPerMonth, dayOfMonth, category, source };
 }
 
-export function emptyMolecule(name = "Uusi yritys"): Molecule {
+export function emptyMolecule(name = t("Uusi yritys")): Molecule {
   return {
     id: newId("mol"),
     name,
@@ -113,32 +114,32 @@ export function emptyMolecule(name = "Uusi yritys"): Molecule {
 export type PresetId = "it_consultant" | "food_kiosk" | "saas_hybrid" | "webshop";
 
 export const PRESET_LABELS: Record<PresetId, { title: string; hint: string }> = {
-  it_consultant: { title: "IT-konsultti (yksinyrittäjä)", hint: "Tuntityö, laskut 30 pv maksuajalla" },
-  food_kiosk: { title: "Ruokakioski", hint: "Tiskimyynti, kortti- ja käteismaksut" },
-  saas_hybrid: { title: "Ohjelmistoyritys", hint: "Kuukausitilaukset + konsultointitunnit" },
-  webshop: { title: "Verkkokauppa", hint: "Varasto, hävikki, sitoutunut raha" },
+  it_consultant: { title: msg("IT-konsultti (yksinyrittäjä)"), hint: msg("Tuntityö, laskut 30 pv maksuajalla") },
+  food_kiosk: { title: msg("Ruokakioski"), hint: msg("Tiskimyynti, kortti- ja käteismaksut") },
+  saas_hybrid: { title: msg("Ohjelmistoyritys"), hint: msg("Kuukausitilaukset + konsultointitunnit") },
+  webshop: { title: msg("Verkkokauppa"), hint: msg("Varasto, hävikki, sitoutunut raha") },
 };
 
 export function createPreset(id: PresetId): Molecule {
-  const m = emptyMolecule(PRESET_LABELS[id].title);
+  const m = emptyMolecule(t(PRESET_LABELS[id].title));
   switch (id) {
     case "it_consultant": {
       const time = createAtom("TIME_CAPACITY") as TimeCapacityAtom;
-      time.label = "Konsultointitunnit";
+      time.label = t("Konsultointitunnit");
       time.hourlyRate = 85;
       time.utilization = 0.6;
       time.salaryPerPersonMonth = 3500;
       m.atoms = [time];
       m.credit = { openingCash: 5000, customerTermsDays: 30, supplierTermsDays: 14 };
       m.fixedCosts = [
-        fixedCost("Ohjelmistot ja laitteet", 150, "software", 1),
-        fixedCost("Työtila", 250, "rent", 1),
+        fixedCost(t("Ohjelmistot ja laitteet"), 150, "software", 1),
+        fixedCost(t("Työtila"), 250, "rent", 1),
       ];
       return m;
     }
     case "food_kiosk": {
       const trade = createAtom("TRANSACTIONAL_TRADE") as TransactionalTradeAtom;
-      trade.label = "Annosmyynti";
+      trade.label = t("Annosmyynti");
       trade.visitorsPerDay = 600;
       trade.conversionRate = 0.08;
       trade.averageTicket = 9;
@@ -148,15 +149,15 @@ export function createPreset(id: PresetId): Molecule {
       m.atoms = [trade];
       m.credit = { openingCash: 8000, customerTermsDays: 0, supplierTermsDays: 14 };
       m.fixedCosts = [
-        fixedCost("Paikkavuokra", 900, "rent", 1),
-        fixedCost("Sähkö ja vesi", 250, "other", 10),
-        fixedCost("Oma palkka (nosto)", 2200, "other", 15),
+        fixedCost(t("Paikkavuokra"), 900, "rent", 1),
+        fixedCost(t("Sähkö ja vesi"), 250, "other", 10),
+        fixedCost(t("Oma palkka (nosto)"), 2200, "other", 15),
       ];
       return m;
     }
     case "saas_hybrid": {
       const sub = createAtom("RECURRING_SUB") as RecurringSubAtom;
-      sub.label = "Ohjelmistolisenssit";
+      sub.label = t("Ohjelmistolisenssit");
       sub.startingSubscribers = 10;
       sub.newPerMonth = 8;
       sub.churnRateMonthly = 0.03;
@@ -164,7 +165,7 @@ export function createPreset(id: PresetId): Molecule {
       sub.costPerSubscriberMonth = 12;
       sub.cacPerNew = 400;
       const time = createAtom("TIME_CAPACITY") as TimeCapacityAtom;
-      time.label = "Käyttöönottokonsultointi";
+      time.label = t("Käyttöönottokonsultointi");
       time.people = 2;
       time.utilization = 0.35;
       time.hourlyRate = 110;
@@ -173,15 +174,15 @@ export function createPreset(id: PresetId): Molecule {
       m.atoms = [sub, time];
       m.credit = { openingCash: 40000, customerTermsDays: 21, supplierTermsDays: 14 };
       m.fixedCosts = [
-        fixedCost("Pilvipalvelut (pohja)", 600, "software", 1),
-        fixedCost("Toimisto", 1200, "rent", 1),
-        fixedCost("Kirjanpito", 250, "admin", 5),
+        fixedCost(t("Pilvipalvelut (pohja)"), 600, "software", 1),
+        fixedCost(t("Toimisto"), 1200, "rent", 1),
+        fixedCost(t("Kirjanpito"), 250, "admin", 5),
       ];
       return m;
     }
     case "webshop": {
       const matter = createAtom("PHYSICAL_MATTER") as PhysicalMatterAtom;
-      matter.label = "Tuotteet";
+      matter.label = t("Tuotteet");
       matter.unitsPerMonth = 400;
       matter.unitPrice = 39;
       matter.unitCost = 15;
@@ -191,10 +192,10 @@ export function createPreset(id: PresetId): Molecule {
       m.atoms = [matter];
       m.credit = { openingCash: 10000, customerTermsDays: 14, supplierTermsDays: 30 };
       m.fixedCosts = [
-        fixedCost("Verkkokauppa-alusta", 120, "software", 1),
-        fixedCost("Varastotila", 500, "rent", 1),
-        fixedCost("Mainonta", 1500, "marketing", 1),
-        fixedCost("Oma palkka (nosto)", 2500, "other", 15),
+        fixedCost(t("Verkkokauppa-alusta"), 120, "software", 1),
+        fixedCost(t("Varastotila"), 500, "rent", 1),
+        fixedCost(t("Mainonta"), 1500, "marketing", 1),
+        fixedCost(t("Oma palkka (nosto)"), 2500, "other", 15),
       ];
       return m;
     }

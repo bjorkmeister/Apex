@@ -6,6 +6,7 @@
  */
 import type { AtomKind, FixedCost, FixedCostCategory, FixedCostSource, Molecule, RevenueAtom } from "../kernel/types.ts";
 import { createAtom, newId } from "../kernel/presets.ts";
+import { t } from "../i18n/index.ts";
 
 /** Kentät, joita saa muokata atomikohtaisesti. `nullable` = tyhjä arvo tarkoittaa "ei rajaa". */
 const EDITABLE: Record<AtomKind, Record<string, { nullable: boolean; min: number; max: number }>> = {
@@ -111,7 +112,7 @@ export interface NewFixedCost {
 export function addFixedCost(m: Molecule, c: NewFixedCost): Molecule {
   const cost: FixedCost = {
     id: c.id ?? newId("fc"),
-    label: c.label.trim().slice(0, 60) || "Kulu",
+    label: c.label.trim().slice(0, 60) || t("Kulu"),
     amountPerMonth: Math.max(0, Number.isFinite(c.amountPerMonth) ? c.amountPerMonth : 0),
     dayOfMonth: clamp(Math.round(c.dayOfMonth ?? 1), 1, 30),
     category: c.category ?? "other",

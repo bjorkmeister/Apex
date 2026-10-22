@@ -1138,14 +1138,14 @@ export function createApexWarRoomServer(
 
       if (handleFlowRequest(req, res, url.pathname)) return;
 
-      if (req.method === "GET" && url.pathname === "/") {
+      if (req.method === "GET" && url.pathname === "/classic") {
         const payload = buildViewPayload(session);
         const page = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>APEX — AAA Multi-Agent Business Case Simulator & Strategy War Room</title>
+  <title>APEX — klassinen näkymä</title>
   <style>${WAR_ROOM_CSS}</style>
 </head>
 <body>
@@ -1672,6 +1672,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.PORT ?? 3000);
   const srv = createApexWarRoomServer("vertical_farm", "genesis");
   srv.listen(port, "127.0.0.1", () => {
-    console.log(`\n▲ APEX War Room Server running at http://127.0.0.1:${port}\n`);
+    console.log(`\n▲ APEX Studio: http://127.0.0.1:${port}  (klassinen näkymä: /classic)\n`);
   });
 }

@@ -13,8 +13,11 @@ import { parseIntent } from "../model/intent.ts";
 import { checklistView, emptyChecklist, type ChecklistState } from "../model/launchpad.ts";
 import { personaDef, type PersonaId } from "../model/personas.ts";
 import { callLlmJson, isLlmConfigured } from "../../core/llm/client.ts";
+import { t, withLocale, type Locale } from "../i18n/index.ts";
+import { localeOf } from "./ai.ts";
 
 export interface ChatRequest {
+  locale?: Locale;
   message: string;
   molecule: Molecule;
   checklist?: ChecklistState;
@@ -56,9 +59,15 @@ Sallitut komennot:
 - {"type":"checklist","id":"company-form"|"yel"|"accounting"|"insurance"|"vat"|"bank"|"terms","checked":true|false}
 - {"type":"open_panel","panel":"demand"|"capacity"|"receivables"|"cash"|"costs"|"launchpad"}
 - {"type":"stress","stress":{"volumeChange":-0.2,"priceChange":0,"variableCostChange":0,"fixedCostChange":0}}
+- {"type":"add_event","event":{"title":"nimi","startMonth":0-11,"durationMonths":1-12,"volumeChange":-0.3,"priceChange":0,"variableCostChange":0,"fixedCostChange":0,"oneOffCost":0}}
+- {"type":"remove_event","id":"<tapahtuman id>"}
+- {"type":"set_seasonality","factors":[12 kerrointa tammi–joulu, 1 = tavallinen]}
+- {"type":"set_founder","weeklyHours":luku,"livingCostsPerMonth":luku}
+- {"type":"open_panel","panel":"scenarios"|"widgets"|"advisors"|"market"|"seasons"|"founder"|"goals"|"report"|"actuals"|"tasks"}
 Muokattavat kentät atomityypeittäin:${EDITABLE_FIELDS_DOC}
 Esimerkki: "Lisää Wolt-kotiinkuljetus 30 % komissiolla" ruokakioskille → add_atom TRANSACTIONAL_TRADE, label "Wolt-kotiinkuljetus", params joissa costPerSale = raaka-aineet + 0.30 × averageTicket.
-Jos pyyntö ei vaadi muutosta, palauta "commands": [].`;
+Jos pyyntö ei vaadi muutosta, palauta "commands": [].
+Jos käyttäjä haluaa uuden näkymän, mittarin tai kuvaajan, ohjaa hänet Widgetit-paneeliin (open_panel "widgets").`;
 
 function telemetry(req: ChatRequest): string {
   const m = req.molecule;
@@ -96,8 +105,9 @@ function isMolecule(x: unknown): x is Molecule {
 
 export async function handleChat(raw: unknown): Promise<ChatResponse> {
   const req = raw as ChatRequest;
+  const locale = localeOf(raw);
   if (!req || typeof req.message !== "string" || !req.message.trim() || req.message.length > 2000 || !isMolecule(req.molecule)) {
-    return { reply: "Viestiä ei voitu käsitellä.", commands: [], source: "rules" };
+    return { reply: withLocale(locale, () => t("Viestiä ei voitu käsitellä.")), commands: [], source: "rules" };
   }
   const message = req.message.trim();
   if (isLlmConfigured()) {
@@ -107,8 +117,8 @@ export async function handleChat(raw: unknown): Promise<ChatResponse> {
       .map((h) => `${h.role === "user" ? "Käyttäjä" : "Valmentaja"}: ${h.text.slice(0, 600)}`)
       .join("\n");
     const res = await callLlmJson<{ reply?: unknown; commands?: unknown }>({
-      systemInstruction: SYSTEM,
-      userPrompt: `TELEMETRIA:\n${telemetry(req)}\n\nAIEMPI KESKUSTELU:\n${history || "(ei aiempaa)"}\n\nKÄYTTÄJÄN VIESTI:\n${message}`,
+      systemInstruction: `${SYSTEM}\nVastaa käyttäjän kielellä (${locale === "en" ? "English" : "suomi"}).`,
+      userPrompt: `TELEMETRIA:\n${withLocale(locale, () => telemetry(req))}\n\nAIEMPI KESKUSTELU:\n${history || "(ei aiempaa)"}\n\nKÄYTTÄJÄN VIESTI:\n${message}`,
       temperature: 0.3,
       timeoutMs: 25000,
       taskLabelFi: "APEX Flow -valmentaja",
@@ -121,12 +131,12 @@ export async function handleChat(raw: unknown): Promise<ChatResponse> {
         reply: res.data.reply.slice(0, 2000),
         commands,
         source: "llm",
-        note: dropped > 0 ? `${dropped} ehdotettua muutosta hylättiin, koska ne eivät olleet kelvollisia.` : undefined,
+        note: dropped > 0 ? withLocale(locale, () => t("{n} ehdotettua muutosta hylättiin, koska ne eivät olleet kelvollisia.", { n: dropped })) : undefined,
       };
     }
-    const fallback = parseIntent(message, req.molecule);
-    return { ...fallback, source: "rules", note: `Kielimalli ei vastannut (${res.meta.error ?? "tuntematon virhe"}), käytin sääntöpohjaista tulkkia.` };
+    const fallback = withLocale(locale, () => parseIntent(message, req.molecule));
+    return { ...fallback, source: "rules", note: withLocale(locale, () => t("Kielimalli ei vastannut ({error}), käytin sääntöpohjaista tulkkia.", { error: res.meta.error ?? "?" })) };
   }
-  const r = parseIntent(message, req.molecule);
+  const r = withLocale(locale, () => parseIntent(message, req.molecule));
   return { reply: r.reply, commands: r.commands, source: "rules" };
 }

@@ -1,0 +1,45 @@
+/**
+ * APEX Studio — käännössanasto (`src/flow/i18n/glossary.ts`).
+ *
+ * Talouden termit käännetään aina samalla tavalla. Käännöstyökalu antaa
+ * sanaston kielimallille, ja testit tarkistavat, että termit pysyvät yhtenäisinä.
+ */
+export const GLOSSARY: Record<string, string> = {
+  kate: "margin",
+  myyntikate: "contribution margin",
+  kannattavuusraja: "break-even point",
+  pelivara: "margin of safety",
+  kassa: "cash",
+  alkukassa: "opening cash",
+  "kassan pohja": "lowest cash balance",
+  maksuaika: "payment terms",
+  "asiakkaan maksuaika": "customer payment terms",
+  "toimittajan maksuaika": "supplier payment terms",
+  "rahat matkalla": "money in transit",
+  saamiset: "receivables",
+  ostovelat: "payables",
+  "kiinteät kulut": "fixed costs",
+  "muuttuvat kulut": "variable costs",
+  tulovirta: "revenue stream",
+  vipu: "lever",
+  laskutusaste: "billable utilisation",
+  tuntihinta: "hourly rate",
+  hävikki: "waste",
+  poistuma: "churn",
+  hankintakulu: "acquisition cost",
+  toimituskyky: "delivery capacity",
+  pullonkaula: "bottleneck",
+  perustamislista: "launch checklist",
+  valmentaja: "coach",
+  neuvonantajat: "advisors",
+  skenaario: "scenario",
+  stressitesti: "stress test",
+  YEL: "YEL (Finnish entrepreneur's pension insurance)",
+  ALV: "VAT",
+  "Y-tunnus": "Business ID (Y-tunnus)",
+  PRH: "Finnish Patent and Registration Office (PRH)",
+  Verohallinto: "Finnish Tax Administration",
+  toiminimi: "sole trader (toiminimi)",
+  osakeyhtiö: "limited company (Oy)",
+  "alv 0 %": "excl. VAT",
+};

@@ -1,13 +1,14 @@
 /**
- * APEX Flow — sääntöpohjainen komentotulkki (`src/flow/model/intent.ts`).
+ * APEX Studio — sääntöpohjainen komentotulkki (`src/flow/model/intent.ts`).
  *
- * Ymmärtää yleisimmät suomenkieliset pyynnöt ilman kielimallia ja muuntaa ne
- * validoitaviksi komennoiksi. Kun kielimalli on käytössä, sitä käytetään ensin;
- * tämä tulkki on varajärjestelmä, joka toimii aina.
+ * Ymmärtää yleisimmät suomen- ja englanninkieliset pyynnöt ilman kielimallia ja
+ * muuntaa ne validoitaviksi komennoiksi. Kun kielimalli on käytössä, sitä käytetään
+ * ensin; tämä tulkki on varajärjestelmä, joka toimii aina.
  */
 import type { AtomKind, Molecule } from "../kernel/types.ts";
 import type { FlowCommand } from "./commands.ts";
 import { priceFieldFor } from "./coach.ts";
+import { msg, t } from "../i18n/index.ts";
 
 export interface IntentResult {
   reply: string;
@@ -16,13 +17,13 @@ export interface IntentResult {
 }
 
 export const RULE_EXAMPLES = [
-  "Nosta hintaa 10 %",
-  "Tuntihinta 95 €",
-  "Maksuaika 14 päivää",
-  "Palkkaa uusi työntekijä",
-  "Lisää kulu toimisto 600 €",
-  "Lisää kuukausisopimukset 300 € / kk",
-  "Mitä jos myynti putoaa 20 %?",
+  msg("Nosta hintaa 10 %"),
+  msg("Tuntihinta 95 €"),
+  msg("Maksuaika 14 päivää"),
+  msg("Palkkaa uusi työntekijä"),
+  msg("Lisää kulu toimisto 600 €"),
+  msg("Lisää kuukausisopimukset 300 € / kk"),
+  msg("Mitä jos myynti putoaa 20 %?"),
 ];
 
 const num = (s: string): number => Number(s.replace(/\s/g, "").replace(",", "."));
@@ -33,110 +34,115 @@ function targetAtoms(m: Molecule, text: string) {
   return named.length > 0 ? named : enabled;
 }
 
+const N = String.raw`(\d+(?:[ ,.]\d+)?)`;
+
 export function parseIntent(message: string, m: Molecule): IntentResult {
-  const t = message.toLowerCase().replace(/\s+/g, " ").trim();
+  const text = message.toLowerCase().replace(/\s+/g, " ").trim();
   const commands: FlowCommand[] = [];
   const replies: string[] = [];
 
-  // Stressitesti: "mitä jos myynti putoaa 20 %"
-  const stress = /mitä jos.*(myynti|kysyntä|asiakkaat|asiakasmäärä)[^0-9]*?(putoa|laske|vähene|sakkaa|romahta)[^0-9]*(\d+[,.]?\d*)\s*%/.exec(t);
+  // Stressitesti: "mitä jos myynti putoaa 20 %" / "what if sales drop 20%"
+  const stress =
+    new RegExp(String.raw`mitä jos.*(myynti|kysyntä|asiakkaat|asiakasmäärä)[^0-9]*?(putoa|laske|vähene|sakkaa|romahta)[^0-9]*${N}\s*%`).exec(text) ??
+    new RegExp(String.raw`what if.*(sales|demand|customers|revenue)[^0-9]*?(drop|fall|decline|decrease|shrink)[^0-9]*${N}\s*%`).exec(text);
   if (stress) {
     const x = num(stress[3]) / 100;
     commands.push({ type: "stress", stress: { volumeChange: -x } });
-    replies.push(`Ajoin stressitestin: myynti −${Math.round(x * 100)} %. Näet tuloksen kassapaneelissa.`);
+    replies.push(t("Ajoin stressitestin: myynti −{pct} %. Näet tuloksen kassapaneelissa.", { pct: Math.round(x * 100) }));
     return { reply: replies.join(" "), commands, understood: true };
   }
 
-  // Hinta prosentteina: "nosta hintaa 10 %", "laske hintoja 5 %"
-  const pricePct = /(nosta|korota|laske|alenna|pudota)\w*\s.*?(hin\w*)[^0-9]*(\d+[,.]?\d*)\s*(%|prosent)/.exec(t);
-  // Hinta euroina: "tuntihinta 95 €", "hinta 120 euroa"
-  const priceAbs = /(tuntihin\w*|hin\w*|keskiosto\w*|kuukausihin\w*)\s*(on|olkoon|→|=|:)?\s*(\d+[,.]?\d*)\s*(€|e\b|euro)/.exec(t);
+  // Hinta prosentteina.
+  const pricePct =
+    new RegExp(String.raw`(nosta|korota|laske|alenna|pudota)\w*\s.*?(hin\w*)[^0-9]*${N}\s*(%|prosent)`).exec(text) ??
+    new RegExp(String.raw`(raise|increase|lift|lower|cut|reduce|decrease)\s.*?(price\w*)[^0-9]*${N}\s*(%|percent)`).exec(text);
+  // Hinta euroina.
+  const priceAbs =
+    new RegExp(String.raw`(tuntihin\w*|hin\w*|keskiosto\w*|kuukausihin\w*)\s*(on|olkoon|→|=|:)?\s*${N}\s*(€|e\b|euro)`).exec(text) ??
+    new RegExp(String.raw`(hourly rate|price|average ticket|monthly price)\s*(is|to|=|:|of)?\s*€?\s*${N}\s*(€|eur|euro)?`).exec(text);
   if (pricePct) {
-    const sign = /laske|alenna|pudota/.test(pricePct[1]) ? -1 : 1;
+    const sign = /laske|alenna|pudota|lower|cut|reduce|decrease/.test(pricePct[1]) ? -1 : 1;
     const factor = 1 + (sign * num(pricePct[3])) / 100;
-    for (const a of targetAtoms(m, t)) commands.push({ type: "scale_atom_field", atomId: a.id, field: priceFieldFor(a.kind), factor });
-    replies.push(`Muutin hintaa ${sign > 0 ? "+" : "−"}${pricePct[3]} %.`);
-  } else if (priceAbs && !/kulu/.test(t)) {
+    for (const a of targetAtoms(m, text)) commands.push({ type: "scale_atom_field", atomId: a.id, field: priceFieldFor(a.kind), factor });
+    replies.push(t("Muutin hintaa {sign}{pct} %.", { sign: sign > 0 ? "+" : "−", pct: pricePct[3] }));
+  } else if (priceAbs && !/kulu|cost/.test(text)) {
     const value = num(priceAbs[3]);
-    const wantsHourly = /tunti/.test(priceAbs[1]);
-    const atoms = targetAtoms(m, t).filter((a) => !wantsHourly || a.kind === "TIME_CAPACITY");
+    const wantsHourly = /tunti|hourly/.test(priceAbs[1]);
+    const atoms = targetAtoms(m, text).filter((a) => !wantsHourly || a.kind === "TIME_CAPACITY");
     for (const a of atoms) commands.push({ type: "set_atom_field", atomId: a.id, field: priceFieldFor(a.kind), value });
-    if (atoms.length > 0) replies.push(`Asetin hinnaksi ${value} €.`);
+    if (atoms.length > 0) replies.push(t("Asetin hinnaksi {amount} €.", { amount: value }));
   }
 
-  // Maksuaika: "maksuaika 14 päivää"
-  const terms = /maksua\w*[^0-9]*(\d+)\s*(pv|päiv|vrk)?/.exec(t);
-  if (terms && !/toimittaja/.test(t)) {
-    commands.push({ type: "set_credit", field: "customerTermsDays", value: Math.min(365, num(terms[1])) });
-    replies.push(`Asiakkaan maksuaika on nyt ${terms[1]} päivää.`);
-  } else if (terms) {
-    commands.push({ type: "set_credit", field: "supplierTermsDays", value: Math.min(365, num(terms[1])) });
-    replies.push(`Toimittajan maksuaika on nyt ${terms[1]} päivää.`);
+  // Maksuaika.
+  const terms = /maksua\w*[^0-9]*(\d+)\s*(pv|päiv|vrk)?/.exec(text) ?? /payment terms?[^0-9]*(\d+)\s*(days?|d)?/.exec(text);
+  if (terms) {
+    const supplier = /toimittaja|supplier/.test(text);
+    commands.push({ type: "set_credit", field: supplier ? "supplierTermsDays" : "customerTermsDays", value: Math.min(365, num(terms[1])) });
+    replies.push(supplier ? t("Toimittajan maksuaika on nyt {n} päivää.", { n: terms[1] }) : t("Asiakkaan maksuaika on nyt {n} päivää.", { n: terms[1] }));
   }
 
-  // Rekry: "palkkaa uusi työntekijä"
-  if (/(palkkaa|rekrytoi|palkkaisin|otan)\b.*(työntekijä|henkilö|tekijä|konsultti|apulai|myyjä|kaveri)/.test(t)) {
+  // Rekry.
+  if (/(palkkaa|rekrytoi|palkkaisin|otan)\b.*(työntekijä|henkilö|tekijä|konsultti|apulai|myyjä|kaveri)/.test(text) || /\b(hire|recruit)\b/.test(text)) {
     const time = m.atoms.find((a) => a.enabled && a.kind === "TIME_CAPACITY");
     if (time && time.kind === "TIME_CAPACITY") {
       commands.push({ type: "set_atom_field", atomId: time.id, field: "people", value: time.people + 1 });
-      replies.push(`Lisäsin tekijän: ${time.label} – nyt ${time.people + 1} henkilöä. Katso toimituskyky-paneelista, maksaako rekry itsensä.`);
+      replies.push(t("Lisäsin tekijän: {label} – nyt {n} henkilöä. Katso toimituskyky-paneelista, maksaako rekry itsensä.", { label: time.label, n: time.people + 1 }));
     } else {
-      commands.push({ type: "add_fixed_cost", label: "Työntekijä (palkka + sivukulut)", amountPerMonth: Math.round(3000 * 1.21), dayOfMonth: 15, category: "other" });
-      replies.push("Lisäsin työntekijän kiinteäksi kuluksi (3 000 € + 21 % sivukulut). Muokkaa summaa kulupaneelissa.");
+      commands.push({ type: "add_fixed_cost", label: t("Työntekijä (palkka + sivukulut)"), amountPerMonth: Math.round(3000 * 1.21), dayOfMonth: 15, category: "other" });
+      replies.push(t("Lisäsin työntekijän kiinteäksi kuluksi (3 000 € + 21 % sivukulut). Muokkaa summaa kulupaneelissa."));
     }
   }
 
-  // Kiinteä kulu: "lisää kulu toimisto 600 €"
-  const cost = /lisää\s+(?:kiinteä\s+)?(?:kulu|kuluihin|kuluksi)\s+(.+?)\s+(\d+[ ,.]?\d*)\s*(€|e\b|euro)/.exec(t);
+  // Kiinteä kulu.
+  const cost =
+    new RegExp(String.raw`lisää\s+(?:kiinteä\s+)?(?:kulu|kuluihin|kuluksi)\s+(.+?)\s+${N}\s*(€|e\b|euro)`).exec(text) ??
+    new RegExp(String.raw`add\s+(?:a\s+)?(?:fixed\s+)?cost\s+(?:for\s+)?(.+?)\s+€?${N}\s*(€|eur|euro)?`).exec(text);
   if (cost) {
     const label = cost[1].replace(/[:\-–]+$/, "").trim();
     const amount = num(cost[2]);
     commands.push({ type: "add_fixed_cost", label: label.charAt(0).toUpperCase() + label.slice(1), amountPerMonth: amount });
-    replies.push(`Lisäsin kiinteän kulun "${label}" ${amount} € / kk.`);
+    replies.push(t("Lisäsin kiinteän kulun \"{label}\" {amount} € / kk.", { label, amount }));
   }
 
   // Uusi tulovirta.
-  if (/lisää|aloita|haluan myydä|otan käyttöön/.test(t) && !cost) {
+  if (/lisää|aloita|haluan myydä|otan käyttöön|\badd\b|\bstart\b|\bsell\b/.test(text) && !cost) {
     let kind: AtomKind | null = null;
     let label: string | undefined;
-    if (/kuukausi(tila|sopim|maks)|tilaus|jäsenyy|ylläpito|retainer|abonnement/.test(t)) {
+    if (/kuukausi(tila|sopim|maks)|tilaus|jäsenyy|ylläpito|retainer|abonnement|subscription|membership|maintenance/.test(text)) {
       kind = "RECURRING_SUB";
-      label = /ylläpito/.test(t) ? "Ylläpitosopimukset" : "Kuukausitilaukset";
-    } else if (/tuote|tavara|verkkokaup|varasto/.test(t)) {
+      label = /ylläpito|maintenance/.test(text) ? t("Ylläpitosopimukset") : t("Kuukausitilaukset");
+    } else if (/tuote|tavara|verkkokaup|varasto|product|goods|webshop|online store|inventory/.test(text)) {
       kind = "PHYSICAL_MATTER";
-      label = "Tuotemyynti";
-    } else if (/tiski|kioski|myymälä|kahvila|tapahtuma/.test(t)) {
+      label = t("Tuotemyynti");
+    } else if (/tiski|kioski|myymälä|kahvila|tapahtuma|counter|kiosk|shop|café|cafe|store/.test(text)) {
       kind = "TRANSACTIONAL_TRADE";
-      label = "Tiskimyynti";
-    } else if (/tunti|konsultoi|palvelu|koulutu|projekti/.test(t)) {
+      label = t("Tiskimyynti");
+    } else if (/tunti|konsultoi|palvelu|koulutu|projekti|hours|consult|service|training|project/.test(text)) {
       kind = "TIME_CAPACITY";
-      label = /koulutu/.test(t) ? "Koulutukset" : "Asiantuntijatyö";
+      label = /koulutu|training/.test(text) ? t("Koulutukset") : t("Asiantuntijatyö");
     }
     if (kind) {
       const params: Record<string, number> = {};
-      const monthly = /(\d+[,.]?\d*)\s*(€|e|euroa)\s*\/?\s*(kk|kuukau)/.exec(t);
+      const monthly = /(\d+[,.]?\d*)\s*(€|e|euroa|eur)?\s*\/\s*(kk|kuukau|month|mo)/.exec(text) ?? /€\s*(\d+[,.]?\d*)\s*\/\s*(month|mo)/.exec(text);
       let assumption = "";
       if (kind === "RECURRING_SUB") {
         if (monthly) params.pricePerMonth = num(monthly[1]);
-        // Isot kuukausisopimukset (ylläpito, retainer) myydään yksitellen, eivät kymmenittäin kuussa.
-        if (/sopimu|ylläpito|retainer/.test(t) || (params.pricePerMonth ?? 0) >= 100) {
-          label = /ylläpito/.test(t) ? "Ylläpitosopimukset" : "Kuukausisopimukset";
-          params.newPerMonth = 1;
-          params.startingSubscribers = 0;
-          params.churnRateMonthly = 0.02;
-          params.cacPerNew = 0;
-          params.costPerSubscriberMonth = 0;
-          assumption = " Oletin yhden uuden sopimuksen kuussa ja 2 % poistuman – säädä nämä vivuista.";
+        if (/sopimu|ylläpito|retainer|contract|maintenance/.test(text) || (params.pricePerMonth ?? 0) >= 100) {
+          label = /ylläpito|maintenance/.test(text) ? t("Ylläpitosopimukset") : t("Kuukausisopimukset");
+          Object.assign(params, { newPerMonth: 1, startingSubscribers: 0, churnRateMonthly: 0.02, cacPerNew: 0, costPerSubscriberMonth: 0 });
+          assumption = " " + t("Oletin yhden uuden sopimuksen kuussa ja 2 % poistuman – säädä nämä vivuista.");
         }
       }
       commands.push({ type: "add_atom", kind, label, params });
-      replies.push(`Lisäsin uuden tulovirran: ${label}. Sen vivut ilmestyivät oikealle – säädä luvut omiksesi.${assumption}`);
+      replies.push(t("Lisäsin uuden tulovirran: {label}. Sen vivut ilmestyivät oikealle – säädä luvut omiksesi.", { label: label ?? "" }) + assumption);
     }
   }
 
   if (commands.length === 0) {
     return {
-      reply: `En ymmärtänyt pyyntöä ilman kielimallia. Voit kokeilla esimerkiksi: ${RULE_EXAMPLES.map((e) => `"${e}"`).join(", ")}. Kun kielimalli on kytketty (APEXin asetukset), ymmärrän vapaamuotoisempia pyyntöjä.`,
+      reply: t("En ymmärtänyt pyyntöä ilman kielimallia. Voit kokeilla esimerkiksi: {examples}. Kun kielimalli on kytketty (asetukset), ymmärrän vapaamuotoisempia pyyntöjä.", {
+        examples: RULE_EXAMPLES.map((e) => `"${t(e)}"`).join(", "),
+      }),
       commands: [],
       understood: false,
     };

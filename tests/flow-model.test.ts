@@ -18,7 +18,7 @@ import {
   setAtomField,
   updateFixedCost,
 } from "../src/flow/model/edit.ts";
-import { transpileFlowModule } from "../src/flow/server/routes.ts";
+import { MODULE_PATH_RE, transpileFlowModule } from "../src/flow/server/routes.ts";
 
 describe("APEX Flow — näkymä ja vivut", () => {
   it("1. Päänäkymässä on tasan viisi solmua ja kolme pääkuvaa", () => {
@@ -96,7 +96,7 @@ describe("APEX Flow — näkymä ja vivut", () => {
 
 describe("APEX Flow — selainkäännös", () => {
   const flowDir = path.resolve("src/flow");
-  const dirs = ["kernel", "model", "client"];
+  const dirs = ["kernel", "model", "client", "i18n"];
 
   it("7. Jokainen selaimelle tarjottava moduuli kääntyy ja on syntaktisesti kelvollista JavaScriptiä", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "apex-flow-"));
@@ -114,6 +114,8 @@ describe("APEX Flow — selainkäännös", () => {
           assert.ok(fs.existsSync(target), `${dir}/${file}: tuotua tiedostoa ei ole (${spec})`);
           assert.ok(dirs.includes(path.basename(path.dirname(target))), `${dir}/${file}: tuonti sallitun hakemiston ulkopuolelta (${spec})`);
         }
+        const m = MODULE_PATH_RE.exec(`/flow/${dir}/${file}`);
+        assert.ok(m && m[1] === dir && m[2] === file, `/flow/${dir}/${file}: reitti ei tunnista polkua`);
         const out = path.join(tmp, `${dir}-${file.replace(/\.ts$/, ".mjs")}`);
         fs.writeFileSync(out, js!);
         execFileSync(process.execPath, ["--check", out]);

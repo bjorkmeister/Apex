@@ -10,7 +10,8 @@
  * Ajetaan vain selaimessa.
  */
 import type { FlowView, NodeId, NodeStatus } from "../model/view.ts";
-import { esc, money } from "../model/format.ts";
+import { esc, money, monthName } from "../model/format.ts";
+import { t } from "../i18n/index.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -90,7 +91,7 @@ export class FlowCanvas {
 
   constructor(host: HTMLElement, onSelect: (id: NodeId) => void) {
     this.onSelect = onSelect;
-    this.svg = el("svg", { viewBox: "0 0 1000 370", class: "flow-svg", role: "img", "aria-label": "Yrityksen rahavirrat" });
+    this.svg = el("svg", { viewBox: "0 0 1000 370", class: "flow-svg", role: "img", "aria-label": t("Yrityksen rahavirrat") });
     host.innerHTML = "";
     host.appendChild(this.svg);
 
@@ -127,7 +128,7 @@ export class FlowCanvas {
     tankGroup.appendChild(this.tankFrame);
     this.water = el("path", { d: "", fill: "url(#water-grad)", "clip-path": "url(#tank-clip)", class: "flow-water" });
     tankGroup.appendChild(this.water);
-    tankGroup.appendChild(el("text", { x: TANK.x + TANK.w / 2, y: TANK.y - 14, class: "flow-node-title", "text-anchor": "middle" })).textContent = "Kassa";
+    tankGroup.appendChild(el("text", { x: TANK.x + TANK.w / 2, y: TANK.y - 14, class: "flow-node-title", "text-anchor": "middle" })).textContent = t("Kassa");
     this.tankLabel = el("text", { x: TANK.x + TANK.w / 2, y: TANK.y + 40, class: "flow-tank-value", "text-anchor": "middle" });
     this.tankSub = el("text", { x: TANK.x + TANK.w / 2, y: TANK.y + 60, class: "flow-node-sub", "text-anchor": "middle" });
     tankGroup.appendChild(this.tankLabel);
@@ -175,7 +176,7 @@ export class FlowCanvas {
     g.appendChild(sub);
     if (b.h > 90) {
       const hint = el("text", { x: b.x + b.w - 14, y: b.y + b.h - 12, class: "flow-node-hint", "text-anchor": "end" });
-      hint.textContent = "avaa ›";
+      hint.textContent = t("avaa ›");
       g.appendChild(hint);
     }
     title.setAttribute("data-title", id);
@@ -263,8 +264,9 @@ export class FlowCanvas {
     const p = v.sim.days[Math.min(day, v.sim.days.length - 1)];
     this.tankLabel.textContent = money(p.cash);
     this.tankLabel.setAttribute("data-negative", p.cash < 0 ? "1" : "0");
-    this.tankSub.textContent = `kk ${Math.floor(day / 30) + 1}, pv ${(day % 30) + 1}`;
-    this.pipeAmount.textContent = p.receivables > 0.5 ? `${money(p.receivables)} matkalla` : "";
+    const mo = v.sim.months[Math.floor(day / 30)];
+    this.tankSub.textContent = v.varies && mo ? `${monthName(mo.calendarMonth)} · ${t("pv {d}", { d: (day % 30) + 1 })}` : t("kk {m}, pv {d}", { m: Math.floor(day / 30) + 1, d: (day % 30) + 1 });
+    this.pipeAmount.textContent = p.receivables > 0.5 ? t("{amount} matkalla", { amount: money(p.receivables) }) : "";
   }
 
   private frame(ts: number): void {
@@ -358,38 +360,59 @@ export class FlowCanvas {
   }
 }
 
-/** Kassan aikajana: viiva, nollataso, miinusalue ja valittu päivä. */
-export function renderTimeline(view: FlowView, day: number): string {
+export interface TimelineOverlay {
+  name: string;
+  color: string;
+  cash: number[];
+}
+
+/** Kassan aikajana: viiva, nollataso, miinusalue, tapahtumat, skenaariot ja valittu päivä. */
+export function renderTimeline(view: FlowView, day: number, overlays: TimelineOverlay[] = []): string {
   const days = view.sim.days;
   if (days.length === 0) return "";
   const W = 1000;
   const H = 120;
   const pad = 8;
-  const cashes = days.map((d) => d.cash);
-  const max = Math.max(0, ...cashes);
-  const min = Math.min(0, ...cashes);
+  const all = [...days.map((d) => d.cash), ...overlays.flatMap((o) => o.cash)];
+  const max = Math.max(0, ...all);
+  const min = Math.min(0, ...all);
   const span = Math.max(1, max - min);
   const x = (i: number) => pad + (i / (days.length - 1)) * (W - pad * 2);
   const y = (c: number) => pad + ((max - c) / span) * (H - pad * 2);
-  const pts = days.map((d, i) => `${x(i).toFixed(1)},${y(d.cash).toFixed(1)}`).join(" ");
+  const line = (cash: number[]) => cash.map((c, i) => `${x(i).toFixed(1)},${y(c).toFixed(1)}`).join(" ");
   const zeroY = y(0);
-  const months = Array.from({ length: Math.floor(days.length / 30) + 1 }, (_, m) => m * 30)
-    .filter((d) => d < days.length)
-    .map((d) => `<line x1="${x(d)}" x2="${x(d)}" y1="${pad}" y2="${H - pad}" class="tl-month"/><text x="${x(d) + 4}" y="${H - 2}" class="tl-month-label">${d / 30 + 1}</text>`)
+  const months = view.sim.months
+    .map((mo) => {
+      const d = mo.month * 30;
+      const label = view.varies ? monthName(mo.calendarMonth) : String(mo.month + 1);
+      return `<line x1="${x(d)}" x2="${x(d)}" y1="${pad}" y2="${H - pad}" class="tl-month"/><text x="${x(d) + 4}" y="${H - 2}" class="tl-month-label">${esc(label)}</text>`;
+    })
+    .join("");
+  const events = (view.molecule.events ?? [])
+    .map((e) => {
+      const x0 = x(Math.min(days.length - 1, e.startMonth * 30));
+      const x1 = x(Math.min(days.length - 1, (e.startMonth + e.durationMonths) * 30 - 1));
+      return `<rect x="${x0}" y="0" width="${Math.max(2, x1 - x0)}" height="${H}" class="tl-event"><title>${esc(e.title)}</title></rect><text x="${x0 + 3}" y="11" class="tl-event-label">${esc(e.title.slice(0, 26))}</text>`;
+    })
     .join("");
   const cashOut =
     view.sim.cashOutDay !== null
-      ? `<circle cx="${x(view.sim.cashOutDay)}" cy="${zeroY}" r="6" class="tl-cashout"/><text x="${x(view.sim.cashOutDay) + 9}" y="${zeroY - 8}" class="tl-cashout-label">Kassa loppuu</text>`
+      ? `<circle cx="${x(view.sim.cashOutDay)}" cy="${zeroY}" r="6" class="tl-cashout"/><text x="${x(view.sim.cashOutDay) + 9}" y="${zeroY - 8}" class="tl-cashout-label">${esc(t("Kassa loppuu"))}</text>`
       : "";
   const cur = days[Math.min(day, days.length - 1)];
-  return `<svg viewBox="0 0 ${W} ${H}" class="flow-timeline-svg" preserveAspectRatio="none" aria-label="Kassan kehitys 12 kuukautta">
+  const legend = overlays.length
+    ? `<div class="tl-legend"><span><i style="background:#38bdf8"></i>${esc(t("Nykyinen"))}</span>${overlays.map((o) => `<span><i style="background:${o.color}"></i>${esc(o.name)}</span>`).join("")}</div>`
+    : "";
+  return `<svg viewBox="0 0 ${W} ${H}" class="flow-timeline-svg" preserveAspectRatio="none" aria-label="${esc(t("Kassan kehitys 12 kuukautta"))}">
     <rect x="0" y="${zeroY}" width="${W}" height="${Math.max(0, H - zeroY)}" class="tl-negative"/>
+    ${events}
     ${months}
     <line x1="0" x2="${W}" y1="${zeroY}" y2="${zeroY}" class="tl-zero"/>
-    <polyline points="${pts}" class="tl-line"/>
+    ${overlays.map((o) => `<polyline points="${line(o.cash)}" class="tl-overlay" style="stroke:${o.color}"/>`).join("")}
+    <polyline points="${line(days.map((d) => d.cash))}" class="tl-line"/>
     ${cashOut}
     <line x1="${x(day)}" x2="${x(day)}" y1="0" y2="${H}" class="tl-cursor"/>
     <circle cx="${x(day)}" cy="${y(cur.cash)}" r="5" class="tl-cursor-dot"/>
   </svg>
-  <div class="tl-caption">${esc(`Päivä ${day + 1}: kassa ${money(cur.cash)}`)}${cur.receivables > 0.5 ? esc(` · matkalla ${money(cur.receivables)}`) : ""}</div>`;
+  <div class="tl-caption">${esc(t("Päivä {d}: kassa {amount}", { d: day + 1, amount: money(cur.cash) }))}${cur.receivables > 0.5 ? esc(" · " + t("{amount} matkalla", { amount: money(cur.receivables) })) : ""}${legend}</div>`;
 }
