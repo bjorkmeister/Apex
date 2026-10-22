@@ -155,6 +155,14 @@ export class FlowCanvas {
     cancelAnimationFrame(this.rafId);
   }
 
+  /** Himmentää solmut, jotka eivät kuulu valittuun näkökulmaan (osa-aluejohtajan rajapinnat). */
+  setFocus(nodes: NodeId[]): void {
+    this.svg.querySelectorAll<SVGElement>(".flow-node[data-node]").forEach((g) => {
+      const id = g.getAttribute("data-node") as NodeId;
+      g.classList.toggle("dim", !nodes.includes(id));
+    });
+  }
+
   private addNodeBox(id: NodeId, b: Box): void {
     const g = el("g", { class: "flow-node", "data-node": id, tabindex: 0 });
     const frame = el("rect", { x: b.x, y: b.y, width: b.w, height: b.h, rx: 14, class: "flow-node-frame" });

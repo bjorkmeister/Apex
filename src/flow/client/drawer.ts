@@ -213,6 +213,7 @@ function cashDrawer(ctx: DrawerContext): string {
     : "";
   return `<section class="fd-section">
     <div class="fd-inputs"><label>Alkukassa ${numberInput(`data-credit-field="openingCash"`, m.credit.openingCash, { step: 100, suffix: "€" })}</label></div>
+    <button class="fd-chip" data-action="import-open">📄 Tuo tiliote (CSV)</button>
     <h4>Kuukausi kuukaudelta</h4>
     <table class="fd-table fd-table-compact"><thead><tr><th>kk</th><th>Myynti</th><th>Kulut</th><th>Tulos</th><th>Kassa lopussa</th></tr></thead><tbody>${rows}</tbody></table>
     <p class="fd-note">Luvut ilman arvonlisäveroa. Tuloveroja ja lainojen korkoja ei ole mallinnettu. Kirjanpidon täsmäytysero: ${money(view.sim.reconciliationError)}.</p>
@@ -253,7 +254,7 @@ function costsDrawer(ctx: DrawerContext): string {
     <h4>Kiinteät kulut</h4>
     <p class="fd-note">Nämä maksetaan joka kuukausi myynnistä riippumatta, merkittynä päivänä.</p>
     <div class="fd-costs">${m.fixedCosts.map(fixedCostRow).join("") || `<p class="fd-note">Ei kiinteitä kuluja vielä.</p>`}</div>
-    <button class="fd-chip" data-action="add-fc">+ Lisää kulu</button>
+    <div class="fd-chips"><button class="fd-chip" data-action="add-fc">+ Lisää kulu</button><button class="fd-chip" data-action="import-open">📄 Tuo kulut tiliotteelta (CSV)</button></div>
     ${payroll ? `<h4>Palkat</h4><ul class="fd-list">${payroll}</ul>
       <div class="fd-inputs"><label>Palkanmaksupäivä ${numberInput(`data-payroll-day`, m.payrollDay, { step: 1, suffix: ". pv" })}</label></div>` : ""}
   </section>

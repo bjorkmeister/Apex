@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import * as nodeModule from "node:module";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { renderFlowPage } from "./page.ts";
+import { handleChat } from "./chat.ts";
 
 const FLOW_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ALLOWED_DIRS = new Set(["kernel", "model", "client"]);
@@ -38,6 +39,10 @@ export function transpileFlowModule(dir: string, file: string): string | null {
 
 /** Käsittelee APEX Flow -pyynnön. Palauttaa `true`, jos pyyntö käsiteltiin. */
 export function handleFlowRequest(req: IncomingMessage, res: ServerResponse, pathname: string): boolean {
+  if (req.method === "POST" && pathname === "/api/flow/chat") {
+    void handleChatRequest(req, res);
+    return true;
+  }
   if (req.method !== "GET") return false;
   if (pathname === "/flow" || pathname === "/flow/") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
@@ -60,4 +65,30 @@ export function handleFlowRequest(req: IncomingMessage, res: ServerResponse, pat
     res.end(`APEX Flow: moduulin käännös epäonnistui: ${(err as Error).message}`);
   }
   return true;
+}
+
+const MAX_BODY = 256 * 1024;
+
+async function handleChatRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of req) {
+      const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += b.length;
+      if (size > MAX_BODY) {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Pyyntö on liian suuri." }));
+        return;
+      }
+      chunks.push(b);
+    }
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf-8") || "{}");
+    const out = await handleChat(body);
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify(out));
+  } catch (err) {
+    res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ error: `Virheellinen pyyntö: ${(err as Error).message}` }));
+  }
 }
