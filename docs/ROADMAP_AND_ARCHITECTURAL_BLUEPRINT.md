@@ -140,10 +140,10 @@ Käyttäjä voi keskustella yrityksensä kanssa luonnollisella kielellä ja luod
 
 ---
 
-## 8. Tiekartta v3.0 (päivitetty 23.10.2026)
+## 8. Tiekartta v3.1 (päivitetty 23.10.2026)
 
 > [!NOTE]
-> **v2-perusta (vaiheet 1–14) on valmis** ja GitHubissa (85/85 testiä). v3.0 rakentuu sen päälle eikä hylkää mitään: atomiydin, kaavat, herkkyys, valmentaja, tuonti, kielituki ja widgetit säilyvät. Tekninen määrittely: `docs/APEX_TECHNICAL_SPECIFICATION_DOCUMENT.md` (v3.0-PRO-SPEC).
+> **v2-perusta (vaiheet 1–14) on valmis** ja GitHubissa (85/85 testiä). v3.1 rakentuu sen päälle eikä hylkää mitään: atomiydin, kaavat, herkkyys, valmentaja, tuonti, kielituki ja widgetit säilyvät. Tekninen määrittely: `docs/APEX_TECHNICAL_SPECIFICATION_DOCUMENT.md` (v3.1-PRO-SPEC).
 
 ### v2-perusta (valmis)
 
@@ -153,14 +153,14 @@ Käyttäjä voi keskustella yrityksensä kanssa luonnollisella kielellä ja luod
 | 9–11 | Kielituki FI/EN, APEX Studio yhtenä sovelluksena, prompt-to-widget | ✅ |
 | 12–14 | Skenaariot ja Monte Carlo, neuvonantajat, lukujen alkuperä, raportti, toteuma, sesongit ja kriisit | ✅ |
 
-### v3.0-tiekartta: APEX Studio yhtenäiseksi
+### v3.1-tiekartta: APEX Studio yhtenäiseksi
 
 | Vaihe | Nimi | Sisältö | Hyväksymisehto |
 | :-: | :-- | :-- | :-- |
-| **V1** | Käyttöliittymän yhdistäminen | 5-vyöhykkeinen kuori (komentopalkki, navigaattori, kangas, tarkastelija, aikajana). Classic-väritokenit Studioon. Classicin rahoitus-, operaatio- ja organisaatiopaneelien ulkoasu siirretään Studioon, toistaiseksi atomidatan päällä. Tekstit `t()`:n kautta. | Kaikki nykyiset toiminnot toimivat uudessa kuoressa. FI/EN toimii. Vanhat testit vihreinä. |
-| **V2** | Universaali prosessigraafi | `src/flow/graph/`: solmut (L0–L5), ICOM-portit, hierarkkiset virrat, `EntityURI`-rekisteri, validointi, simulaattori ja pääkirja (eriytetään `core/engine/ledger.ts`:stä). `atomToSubgraph` + vanhojen mallien siirto. Semanttinen zoom solmuille ja virroille. | Golden-testit: graafi vs. atomiydin neljällä esimerkkimallilla, ero ≤ 0,5 %. Tase täsmää joka kuukausi. 300 lehtisolmua × 360 kk < 16 ms (muuten Web Worker). |
-| **V3** | Genesis-to-Operations | 8 vaihetta (ongelma → ratkaisu → markkina → asiakkaat → hankinta → ansaintamalli → kyvykkyydet → topologia ja hallinto) ja 6-portainen deterministinen kääntäjä. Perustamislista muuttuu hallintotehtäviksi, jotka kytkeytyvät solmujen fysiikkaan. | Sama syöte tuottaa aina saman graafin. Ei toimialaoletuksia koodissa (testi). |
-| **V4** | Mekanismit, linssit ja roolit | IT-järjestelmät, roolit ja resurssit solmujen mekanismiportteihin. 4 X-Ray-linssiä (operaatiot, kate-Sankey, IT ja data, organisaatio ja vastuut). Persona-HUD ja osa-alueen rajaus (subsystem scoping). | Linssit näyttävät saman graafin eri tavoin ilman eri dataa. Osa-aluejohtaja näkee vain oman alueensa ja sen rajapinnat. |
+| **V1** | Käyttöliittymän yhdistäminen | 5-vyöhykkeinen kuori (komentopalkki, navigaattori, kangas, tarkastelija, aikajana). Classic-väritokenit Studioon. Classicin rahoitus-, operaatio- ja organisaatiopaneelien ulkoasu siirretään Studioon, toistaiseksi atomidatan päällä. Tekstit `t()`:n kautta. **Kypsyystaso:** persoona valitsee oletustason (suunnittelija 0, yrittäjä ja johtaja 3), kyvykkyyskartta-näkymä tasoille 0–1, käsiteselitykset opiskelijalle. | Kaikki nykyiset toiminnot toimivat uudessa kuoressa. FI/EN toimii. Vanhat testit vihreinä. |
+| **V2** | Universaali prosessigraafi | `src/flow/graph/`: solmut (L0–L5), ICOM-portit, hierarkkiset virrat, `EntityURI`-rekisteri, validointi, simulaattori ja pääkirja (eriytetään `core/engine/ledger.ts`:stä). `atomToSubgraph` + vanhojen mallien siirto. Semanttinen zoom solmuille ja virroille. **Kypsyystaso:** `maturity`, `definition` (defined/named/unknown) ja `BusinessCapability` mukana tyypeissä alusta asti; simulaattori ohittaa määrittelemättömät solmut. | Golden-testit: graafi vs. atomiydin neljällä esimerkkimallilla, ero ≤ 0,5 %. Tase täsmää joka kuukausi. 300 lehtisolmua × 360 kk < 16 ms (muuten Web Worker). |
+| **V3** | Genesis-to-Operations | 8 vaihetta (ongelma → ratkaisu → markkina → asiakkaat → hankinta → ansaintamalli → kyvykkyydet → topologia ja hallinto) ja 6-portainen deterministinen kääntäjä. Perustamislista muuttuu hallintotehtäviksi, jotka kytkeytyvät solmujen fysiikkaan. **Kypsyystaso:** kääntäjä noudattaa tasoa (4.2 vaihe 0), `gaps.ts` aukkoanalyysi ja selkokielinen yhteenveto uhista, kuluista ja huomioitavista asioista, kyvykkyysmalli ja huomioitavien asioiden pohjat dataa (`src/flow/graph/capabilities/`). Täysi end-to-end on tason 3 valinta. | Sama syöte tuottaa aina saman graafin. Ei toimialaoletuksia koodissa (testi). Taso 0 -malli ei sisällä prosessisolmuja, ja aukkoyhteenveto toimii ainakin kolmella eri datapohjalla. |
+| **V4** | Mekanismit, linssit ja roolit | IT-järjestelmät, roolit ja resurssit solmujen mekanismiportteihin. 4 X-Ray-linssiä (operaatiot, kate-Sankey, IT ja data, organisaatio ja vastuut). Persona-HUD ja osa-alueen rajaus (subsystem scoping). | Linssit näyttävät saman graafin eri tavoin ilman eri dataa. Osa-aluejohtaja näkee vain oman alueensa ja sen rajapinnat. Kyvykkyyslinssi (taso 0–1) ja osastorajaus toimivat kaikilla tasoilla. |
 | **V5** | Älykäs muokkaus ja analyysi graafilla | Valmentajan muutokset `GraphCommand`-komennoiksi (tarkistetut, kumottavat). Tuonti pääkirjaan ja solmuille. Herkkyys, stressi ja Monte Carlo graafin kertoimille. Widgetit lukevat `EntityURI`-viitteitä. | Tekoäly ei koskaan aja koodia. Jokainen muutos on kumottavissa ja näkyy alkuperätiedoissa. |
 | **V6** | Classicin poisto | `/classic`-reitti, `src/app/`, `src/components/` ja `src/core/` poistetaan, kun korvaavat testit ovat vihreinä. | Kaikki Classicin ominaisuudet löytyvät Studiosta. |
 | **V7** | Pilvi ja integraatiot | Käyttäjätilit, eristetyt instanssit ja pysyvä muisti, neuvojan asiakasmallit. Kirjanpito- ja ERP-rajapinnat (Procountor, Netvisor ym.). | Tiedot eristetty käyttäjittäin. |
@@ -168,13 +168,6 @@ Käyttäjä voi keskustella yrityksensä kanssa luonnollisella kielellä ja luod
 
 **Sääntö joka vaiheessa:** toimialaan tai kokoluokkaan lukittuja oletuksia ei saa olla koodissa (esimerkit ovat vain dataa), kaikki testit pysyvät vihreinä, ja jokainen vaihe viedään GitHubiin omana committinaan.
 
-### Lisäys v3.1: kypsyystasot (hyväksytty 23.10.2026)
+### Kypsyystasot (v3.1)
 
-Studio ei avaa end-to-end-prosesseja ennen kuin käyttäjä on päättänyt, mitä yritys tekee. Mallilla on kypsyystaso 0 Idea (kyvykkyyskartta), 1 Konsepti, 2 Toimintamalli, 3 Toiminta. Studio näyttää puuttuvat osat (aukkoanalyysi) ja antaa selkokielisen yhteenvedon uhista, kuluista ja huomioitavista asioista. Tason valitsee aina käyttäjä. Tiedot: TSD kohta 4.4.
-
-| Vaihe | Lisäys kypsyystasoista |
-| :-: | :-- |
-| V1 | Persoona valitsee oletustason (suunnittelija 0, yrittäjä ja johtaja 3). Käsiteselitykset opiskelijalle. |
-| V2 | `maturity`, `definition` (defined/named/unknown) ja `CapabilityNode` graafin tyyppeihin alusta asti. Simulaattori ohittaa määrittelemättömät solmut. |
-| V3 | Genesis ja kääntäjä noudattavat tasoa. Kyvykkyysmalli ja huomioitavien asioiden pohjat dataa. `gaps.ts` ja selkokielinen yhteenveto. Täysi end-to-end on tason 3 valinta. |
-| V4 | Kyvykkyyslinssi (taso 0–1) ja osastojohtajan rajaus toimivat kaikilla tasoilla. |
+Studio ei avaa end-to-end-prosesseja ennen kuin käyttäjä on päättänyt mitä yritys tekee: taso 0 Idea (kyvykkyyskartta), 1 Konsepti, 2 Toimintamalli, 3 Toiminta. Tason valitsee aina käyttäjä. Työt on kirjattu suoraan vaiheiden V1–V4 riveihin yllä. Määrittely: TSD kohta 4.4.

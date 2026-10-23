@@ -1,11 +1,11 @@
 # APEX Studio – Technical Specification Document (TSD)
 
-**Versio:** 3.1-PRO-SPEC · **Päivämäärä:** 23.10.2026 · **Korvaa:** v2.4-PRO-SPEC (v3.1 lisää kypsyystasot, kohta 4.4)
+**Versio:** 3.1-PRO-SPEC · **Päivämäärä:** 23.10.2026 · **Korvaa:** v2.4-PRO-SPEC (v3.1 lisää kypsyystasot: kohdat 1.2 P9, 2.5, 3.3, 3.4, 4.1–4.4, 6.5, 7, 9, 10, 11, 12 ja 13)
 **Tila:** Hyväksyttäväksi. Vaiheiden 1–2 toteutus voi alkaa hyväksynnän jälkeen.
 **Koodipohja, josta analyysi on tehty:** `bjorkmeister/Apex` @ `6c974ce` (85/85 testiä läpi)
 
 > [!IMPORTANT]
-> **Yhden lauseen tiivistelmä:** APEX Studio v3.0 yhdistää Flow-ytimen reaktiivisen laskennan, Classic-näkymän ammattimaisen ulkoasun ja uuden toimialasta riippumattoman, fraktaalisen prosessigraafin. Graafi zoomautuu koko yrityksestä (L0) yksittäisiin tehtäviin, IT-järjestelmiin ja pääkirjatileihin (L5) – samalla moottorilla yhden hengen pajasta 50 000 hengen konserniin tai yksittäiseen osastoon.
+> **Yhden lauseen tiivistelmä:** APEX Studio v3.1 yhdistää Flow-ytimen reaktiivisen laskennan, Classic-näkymän ammattimaisen ulkoasun ja uuden toimialasta riippumattoman, fraktaalisen prosessigraafin. Graafi zoomautuu koko yrityksestä (L0) yksittäisiin tehtäviin, IT-järjestelmiin ja pääkirjatileihin (L5) – samalla moottorilla yhden hengen pajasta 50 000 hengen konserniin tai yksittäiseen osastoon. **Kypsyystaso (0 Idea … 3 Toiminta) määrää, kuinka paljon Studio avaa:** liikeideaa suunnitteleva ei saa eteensä valmista end-to-end-yritystä, vaan kyvykkyyskartan ja aukkoanalyysin siitä, mitä yrityksen toimiminen vielä vaatii.
 
 ---
 
@@ -14,13 +14,14 @@
 Dokumentti syntetisoi kolme lähdettä:
 1. **TSD v2.4** ja tiekartta: Business Molecules, Visual Flow Engine, Progressive Disclosure, valmentaja, Founder Launchpad, 7 persoonaa, SaaS-muisti.
 2. **Toteutettu koodi** (vaiheet 1–14): Flow-ydin, kielituki, widgetit, skenaariot, neuvonantajat, sesongit.
-3. **Uusi arkkitehtuurisuunnitelma (Design Log v3.0):** fraktaalinen prosessigraafi, ICOM-portit, semanttinen zoom, EntityURI, 8-vaiheinen Genesis, IT-mekanismit, X-Ray-linssit.
+3. **Uusi arkkitehtuurisuunnitelma (Design Log v3.0, lähde):** fraktaalinen prosessigraafi, ICOM-portit, semanttinen zoom, EntityURI, 8-vaiheinen Genesis, IT-mekanismit, X-Ray-linssit.
 
 Design Log hyväksytään pääosin sellaisenaan. Siinä on kuitenkin muutama sisäinen ristiriita ja tekninen aukko, jotka on korjattu tässä dokumentissa (luku 12: *Tarkennukset ja korjaukset saapuneeseen spesifikaatioon*). Merkittävimmät:
 - **Määritelmä ja ajonaikainen tila erotetaan.** Graafin rakenne (mitä yritys on) ja simulaation tila (mitä siellä juuri nyt tapahtuu) ovat eri tietorakenteet.
 - **Käänteisviittaukset johdetaan indeksiksi** eikä niitä tallenneta käsin, jotta ne eivät voi ajautua ristiriitaan.
 - **Classicin moottoriin ei sidota.** Sen hyvät mekaniikat siirretään uuteen moottoriin.
 - **Toimialaenumit poistetaan kokonaan.** Design Login ensimmäisessä Genesis-luonnoksessa oli vielä mm. `seasonalityProfile: 'summer_peak'`, `operatingArchetype` ja `category: 'pos' | 'crm' | 'erp'`. Myöhempi `UniversalGenesisSpec` on oikea suunta, ja sitä käytetään.
+4. **Käyttäjän lisäys 23.10.2026 (v3.1): kypsyystasot.** Idea-vaiheen suunnittelija ei voi saada valmista end-to-end-graafia. Studion pitää tukea keskeneräistä mallia ja näyttää puuttuvat osat (kohta 4.4). Tämä on sisällytetty kaikkiin asianomaisiin lukuihin, ei vain kohtaan 4.4.
 
 ---
 
@@ -31,7 +32,7 @@ APEX Studio on **liiketoiminnan digitaalinen kaksonen ja valmentaja**. Käyttäj
 
 ### 1.2 Periaatteet (sitovia)
 
-| # | Periaate | Mistä | Miten se toteutuu v3.0:ssa |
+| # | Periaate | Mistä | Miten se toteutuu v3.1:ssä |
 | :-: | :-- | :-- | :-- |
 | P1 | **Ehdoton toimiala-agnostisuus** | Käyttäjä, v2.4 | Skeemassa, kääntäjässä ja moottorissa ei ole yhtään toimialasanaa tai -enumia. Toimialat ovat dataa. Esimerkkipohjat ovat erillisiä datapaketteja. |
 | P2 | **Ei automaattista ERP-monimutkaistumista** | v2.4 | Semanttinen zoom: näkyvä tarkkuus riippuu zoomista ja persoonasta, ei yrityksen koosta. |
@@ -41,6 +42,7 @@ APEX Studio on **liiketoiminnan digitaalinen kaksonen ja valmentaja**. Käyttäj
 | P6 | **Laskenta säilyy täsmäävänä** | Classic, Flow | Invariantit (luku 6.5): kassa, pääkirja ja virtojen massatase täsmäävät jokaisella tickillä. |
 | P7 | **Kirjoita kerran, käännä työkalulla** | Vaihe 9 | Kaikki uusi käyttöliittymäteksti kulkee `t()`-funktion kautta. Classicin kovakoodattu suomi ei siirry sellaisenaan. |
 | P8 | **Ammattimainen, tiheä mutta rauhallinen ulkoasu** | Classic + v2.4 | Classicin värit, ohuet viivat ja tasavälinumerot. Tiheyttä säätelevät zoom ja persoona (luku 2.4). |
+| P9 | **Kypsyystaso ohjaa avautumista** | Käyttäjä 23.10.2026 | Studio ei avaa prosesseja, ostoa, myyntiä tai simulaatiota ennen kuin käyttäjä on päättänyt niistä (taso 0 Idea → 3 Toiminta, kohta 4.4). Keskeneräinen on sallittua, ja puuttuvat osat näytetään aukkoanalyysina eikä täytetä arvauksilla. |
 
 ---
 
@@ -126,6 +128,8 @@ Sama graafi piirretään neljällä tavalla. Linssi vaihtaa vain esitystapaa, ei
 | **IT & Data** | Automaatioaste: manuaalinen (punainen katko), taulukko (keltainen), integroitu (syaani) | Datavirrat, viive, uudelleensyöttö | Käsin tehtävät siirrot, integraatiovelka |
 | **Org & Accountability** | Omistava rooli / yksikkö | Luovutukset yksiköiden välillä | FTE-ylikuorma, RACI-aukot |
 
+**Huom. tasot 0–1:** kyvykkyyskartta (`BusinessCapability`, kohta 3.3) piirretään omana näkymänään, ei linssinä. Linssit 1–4 aktivoituvat vasta, kun graafissa on määriteltyjä prosessisolmuja (taso 2+). IT & Data -linssi voi tasolla 1 näyttää suunnitellut järjestelmätarpeet ilman virtoja.
+
 ### 2.4 Tiheyden hallinta: Classic-tyyli ja selkeys samassa
 Classicin ulkoasu on tiheä, ja v2.4:n periaate taas on "zen ja selkeys". Ristiriita ratkaistaan näin:
 - **Tyyli (värit, viivat, tasavälinumerot) otetaan Classicista aina.**
@@ -145,7 +149,9 @@ Persona vaihtaa **KPI-nauhan, oletuszoomin, oletuslinssin, inspektorin välileht
 | Valmentaja / tilitoimisto | Kassa, kate, maksuajat, toteuma vs. suunnitelma | L1 · Raha |
 | Rahoittaja / VC | Liikevaihdon kasvu, kate-%, LTV:CAC, burn multiple, runway, vaihteluvälit | L0 · Raha |
 
-**Subsystem Scoping** on v3.0:ssa graafioperaatio: käyttäjä valitsee minkä tahansa solmun "juureksi". Näkymä rajautuu sen alipuuhun. Solmun ICOM-portit näkyvät ulkoisina rajapintoina, joiden kautta muu yritys syöttää ja vastaanottaa virtoja. Tämä toteuttaa v2.4:n osa-aluejohtajan näkymän yleisesti, esimerkiksi myynnille, yksittäiselle tehtaalle tai IT-osastolle.
+**Oletuskypsyystaso persoonittain** (kohta 4.4): Opiskelija 3 valmiilla esimerkillä (tai 0 alusta opeteltaessa), **Perustaja ja liikeideaa suunnitteleva 0**, yrittäjä 3, osa-aluejohtaja 3 oman alipuun juurella, COO, toimitusjohtaja, neuvoja ja rahoittaja 3. Taulukon "Perustaja / yksinyrittäjä" -rivi (L1 · Ops) koskee tasoa 2–3. Tasolla 0–1 päänäkymä on **kyvykkyyskartta** (ei L1-prosessiketju), ja KPI-nauhana ovat aukkojen määrä, tuntemattomat kulut ja avoimet huomioitavat asiat. Persoona vaihtaa vain oletuksen, ja käyttäjä voi aina vaihtaa tasoa itse.
+
+**Subsystem Scoping** on v3.1:ssä graafioperaatio: käyttäjä valitsee minkä tahansa solmun "juureksi". Näkymä rajautuu sen alipuuhun. Solmun ICOM-portit näkyvät ulkoisina rajapintoina, joiden kautta muu yritys syöttää ja vastaanottaa virtoja. Tämä toteuttaa v2.4:n osa-aluejohtajan näkymän yleisesti, esimerkiksi myynnille, yksittäiselle tehtaalle tai IT-osastolle.
 
 ---
 
@@ -185,7 +191,7 @@ Design Login skeemassa ajonaikaiset arvot (`currentStockVolume`, `waitQueueTimeC
 2. Kumoaminen ja vertailu muuttuisivat epäluotettaviksi.
 3. Käänteisviittaukset ajautuisivat ristiriitaan.
 
-v3.0:ssa **määritelmä on ainoa tallennettava totuus**. Indeksi ja ajo johdetaan siitä deterministisesti.
+v3.1:ssä **määritelmä on ainoa tallennettava totuus**. Indeksi ja ajo johdetaan siitä deterministisesti.
 
 ### 3.3 Tietomalli (TypeScript-sopimukset)
 
@@ -251,6 +257,10 @@ export interface UniversalEnterpriseNode {
   name: string;
   level: number;                          // 0 = juuri; ei ylärajaa (L5 on suositus, ei raja)
   band: "value_stream" | "enabling" | "governance" | "external";
+  /** v3.1: onko solmu määritelty. "named" = nimetty ja kuvattu, ei vielä sisältöä. "unknown" = tiedetään tarvittavan, ei tiedetä miten. Oletus "defined". Simulaattori ei laske muita kuin "defined" (kohta 4.4). */
+  definition?: "defined" | "named" | "unknown";
+  /** v3.1: mitä liiketoimintakyvykkyyttä solmu toteuttaa (valinnainen). */
+  realizes?: EntityURI[];
   tags: string[];                         // vapaat käyttäjän tunnisteet
   canonicalRef?: string;                  // valinnainen APQC/SCOR/BIZBOK-viite
   parent: EntityURI | null;
@@ -306,6 +316,19 @@ export type Capability =
   | { kind: "system"; uri: EntityURI; name: string; layer: "capture" | "workflow" | "record" | "intelligence" | "agent"; fixedCostPerTick: FactorRef; capex: FactorRef; availability: FactorRef }
   | { kind: "asset"; uri: EntityURI; name: string; capacityPerTick: FactorRef; operatingCostPerTick: FactorRef; capex: FactorRef; usefulLifeTicks: FactorRef };
 
+/** v3.1: liiketoimintakyvykkyys ("mitä yrityksen pitää osata"), ei sama kuin Capability (mekanismi: rooli, järjestelmä, resurssi). Taso 0–1 rakentuu näistä. */
+export interface BusinessCapability {
+  uri: EntityURI;
+  name: string;
+  status: "known" | "unclear" | "missing";
+  rationale?: string;                     // miksi tämä tarvitaan (datapohjasta tai käyttäjältä)
+  dependsOn: EntityURI[];                 // muut BusinessCapability-viitteet
+  notes: { kind: "cost" | "risk" | "obligation" | "question"; text: string; amount?: FactorRef }[];
+  canonicalRef?: string;                  // valinnainen ulkoinen viite (lisenssi tarkistettava)
+  realizedBy: EntityURI[];                // prosessisolmut, kun taso 2+
+  provenance: "user" | "genesis" | "template";
+}
+
 export interface LedgerAccount {
   uri: EntityURI;
   code: string;                           // käyttäjän tilikartta
@@ -315,6 +338,8 @@ export interface LedgerAccount {
 
 export interface EnterpriseGraph {
   version: 3;
+  /** v3.1: 0 Idea, 1 Konsepti, 2 Toimintamalli, 3 Toiminta. Oletus 3 (migraatio). */
+  maturity?: 0 | 1 | 2 | 3;
   id: string;
   name: string;
   root: EntityURI;
@@ -325,6 +350,7 @@ export interface EnterpriseGraph {
   units: Record<string, FlowUnit>;
   factors: Record<string, FactorNode>;
   capabilities: Record<string, Capability>;
+  businessCapabilities?: Record<string, BusinessCapability>;   // v3.1
   accounts: Record<string, LedgerAccount>;
   opening: { cash: number; balances: Record<string, number> };
   events: GraphEvent[];                   // kriisit ja tapahtumat (yleistys nykyisestä BusinessEventista)
@@ -343,6 +369,8 @@ export interface EnterpriseGraph {
 | **L2** | Prosessiryhmät | Näkyy zoomatessa yhteen L1-laatikkoon |
 | **L3** | Prosessit | – |
 | **L4–L5** | Aktiviteetit, tehtävät, säännöt | Rajaton syvyys, suositus enintään 5 |
+
+**Tasot ja kypsyystaso:** L0–L5 koskevat prosessisolmuja eli kypsyystasoa 2–3. Tasolla 0–1 graafissa on L0-juuri ja `BusinessCapability`-solmut, ja L1-rajoite (2–8 arvovirtalaatikkoa) ei koske kyvykkyyskarttaa. Kun taso nostetaan 2:een, kyvykkyyksistä ehdotetaan prosessisolmuja (`realizes`/`realizedBy`), mutta ei luoda niitä ilman käyttäjän hyväksyntää.
 
 Jos käyttäjän malli ylittää L1-rajan (esim. 11 ydinvaihetta), kääntäjä ehdottaa ryhmittelyä yhteisen emosolmun alle. Mitään ei hävitetä.
 
@@ -376,6 +404,8 @@ Jos käyttäjän malli ylittää L1-rajan (esim. 11 ydinvaihetta), kääntäjä 
 | 7 | **Kyvykkyydet** | Ketkä, millä järjestelmillä ja resursseilla tekevät työn? | Roolit, järjestelmät ja resurssit M-portteihin kertoimineen |
 | 8 | **Topologia ja hallinta** | Lähtötaso, pääoma, hierarkia, SLA-rajat | L0→L3-puu, avaava tase, hallintaportit, aikaresoluutio |
 
+**Kypsyystaso (kohta 4.4):** vaiheet 1–8 ovat käytettävissä millä tahansa tasolla. Tasolla 0 ne täytetään kyvykkyyksinä ja avoimina kysymyksinä (esim. vaihe 5 Hankinta → "tiedetäänkö toimittajat?" → tila `unclear`), ei prosesseina. Vaiheiden täyttöaste näkyy aukkoanalyysissä.
+
 **Nopea tila:** yksi lause → kielimalli täyttää spesifikaation → validointi → kaikki täytetyt kentät merkitään `provenance: "genesis"`. Ilman kielimallia nykyinen `ideaToMolecule` toimii varapolkuna.
 **Arkkitehtitila:** jokaisen vaiheen voi täyttää tai korjata käsin, ja jokainen vaihe voidaan ohittaa oletuksilla.
 **Perustamislista** (`launchpad.ts`) siirtyy vaiheisiin 6–8 hallintatehtäviksi. Ruksi muuttaa tekijöitä ja graafia samalla tavalla kuin nyt (esim. YEL lisää roolille kulun, maksuehto muuttaa virran viivettä), ja ruksin poisto palauttaa muutoksen.
@@ -391,6 +421,7 @@ flowchart LR
   S["UniversalGenesisSpec"] --> P1["1 Tekijärekisteri"] --> P2["2 L0-juuri"] --> P3["3 L1-arvovirta ja kaistat"] --> P4["4 L2–Ln-purku"] --> P5["5 Virtojen kytkentä ja niputus"] --> P6["6 Indeksi, rollup ja kalibrointiajo"] --> G["EnterpriseGraph + raportti"]
 ```
 
+0. **Tasoportti (v3.1):** `graph.maturity` määrää, mitkä vaiheet 1–6 ajetaan. Taso 0–1: vain vaihe 1–2 (tekijät ja L0) sekä `BusinessCapability`-solmut ja aukkoanalyysi (`gaps.ts`). Taso 2: vaiheet 1–5, solmuja voi olla `named`/`unknown`. Taso 3: kaikki vaiheet, kuten alla.
 1. **Tekijärekisteri:** jokaisesta luvusta tulee FactorNode, jolla on alkuperä.
 2. **L0:** juurisolmu ja makroportit vaiheista 3–7.
 3. **L1:** solmuja syntyy vain, jos ontologia niitä vaatii:
@@ -416,7 +447,7 @@ Design Login kolme operaatiota toteutetaan graafikomentoina (`GraphCommand`, luk
 
 ### 4.4 Kypsyystaso (`VentureMaturity`): Studio ei avaa enempää kuin mitä on päätetty
 
-**Ongelma, jonka v3.0 ratkaisi puutteellisesti:** kohdan 4.2 kääntäjä tuottaa aina koko end-to-end-graafin. Henkilö, joka vasta suunnittelee liikeideaa (esim. uusi tuotebrändi), ei tiedä vielä mitä yritys tekee, joten ostojen, myynnin ja tuotannon avaaminen on väärin. Studion pitää sen sijaan auttaa rakentamaan ne osat, joita yrityksen toimiminen vaatii, ja näyttää mitkä puuttuvat.
+**Ongelma, jonka TSD:n ensimmäinen luonnos (v3.0) ratkaisi puutteellisesti:** kohdan 4.2 kääntäjä tuottaa aina koko end-to-end-graafin. Henkilö, joka vasta suunnittelee liikeideaa (esim. uusi tuotebrändi), ei tiedä vielä mitä yritys tekee, joten ostojen, myynnin ja tuotannon avaaminen on väärin. Studion pitää sen sijaan auttaa rakentamaan ne osat, joita yrityksen toimiminen vaatii, ja näyttää mitkä puuttuvat.
 
 **Kypsyystaso on mallin ominaisuus** (`graph.maturity`), ja se rajaa mitä kääntäjä tuottaa ja mitä käyttöliittymä näyttää:
 
@@ -445,7 +476,7 @@ Design Login kolme operaatiota toteutetaan graafikomentoina (`GraphCommand`, luk
 | Osa-aluejohtaja | 3, rajattuna oman alueen alipuuhun | Rajapinnat ulospäin vain virtoina |
 | Toimitusjohtaja, neuvoja, rahoittaja | 3 | |
 
-**Tyyppimuutokset kohtaan 3.3:** `EnterpriseGraph.maturity: 0 | 1 | 2 | 3`; `ProcessNode.definition: "defined" | "named" | "unknown"`; uusi `CapabilityNode` (tila: `known | unclear | missing`, perustelu, riippuvuudet muihin kyvykkyyksiin). Kaikki uudet kentät ovat valinnaisia, jotta nykyiset mallit migroituvat ilman muutoksia (oletus: taso 3, kaikki `defined`).
+**Tyyppimuutokset (jo kirjattu kohtaan 3.3):** `EnterpriseGraph.maturity: 0 | 1 | 2 | 3`; `ProcessNode.definition: "defined" | "named" | "unknown"`; uusi `BusinessCapability` (tila: `known | unclear | missing`, perustelu, riippuvuudet muihin kyvykkyyksiin). Kaikki uudet kentät ovat valinnaisia, jotta nykyiset mallit migroituvat ilman muutoksia (oletus: taso 3, kaikki `defined`).
 
 **Hyväksymisehdot:**
 - Taso 0 -malli ei sisällä yhtään prosessisolmua eikä simulaatiota, ja aukkoyhteenveto tuotetaan kolmella toisistaan poikkeavalla esimerkillä ilman koodimuutoksia.
@@ -477,7 +508,7 @@ Diskreetti tick (oletus päivä, kuten nykyisessä ytimessä). Jokaisella tickil
 6. Telemetria, pullonkaula (ToC: korkein kysyntä ÷ kapasiteetti kriittisellä polulla) ja invariantit tarkistetaan.
 
 ### 6.2 Koosteet (rollup)
-Design Login kaavat (min kriittisellä polulla, summa läpimenoajasta) pätevät vain sarjaketjuissa. v3.0 laskee koosteet ajon tuloksista:
+Design Login kaavat (min kriittisellä polulla, summa läpimenoajasta) pätevät vain sarjaketjuissa. v3.1 laskee koosteet ajon tuloksista:
 - **Läpäisy** = tuotosporttien virtaus.
 - **Kapasiteetti** = virtauspainotettu pullonkaula (sama tulos kuin min sarjaketjussa, oikea myös rinnakkais- ja jakohaaroissa).
 - **Läpimenoaika** = Littlen laki koostetasolla: keskimääräinen WIP ÷ läpäisy.
@@ -499,12 +530,13 @@ Nykyinen `src/flow/kernel/` säilyy:
 3. **Massatase** jokaiselle FlowUnitille, jonka nature ≠ signal: sisään = ulos + varannon muutos + häviö + vanheneminen.
 4. **Koosteet:** emosolmun luvut = lasten luvut (toleranssi 1e-6).
 5. **Determinismi:** sama graafi ja siemen → sama tulos.
+6. **Keskeneräisyys (v3.1):** invariantit 1–4 koskevat vain `defined`-solmuja. `named`/`unknown`-solmu ei tuota virtoja, kuluja eikä kirjauksia, eikä sitä korvata oletusluvuilla. Raportti ja KPI-nauha kertovat "ei laskettu" ja syyn. Jos `defined`-solmun tuleva virta on `named`/`unknown`-solmusta, virta merkitään katkenneeksi (`stub`) ja aukkoanalyysi nostaa sen esiin.
 
 ---
 
 ## 7. Säilyvät ja nousevat ominaisuudet
 
-| v2.4 / toteutettu ominaisuus | v3.0:ssa |
+| v2.4 / toteutettu ominaisuus | v3.1:ssä |
 | :-- | :-- |
 | Business Molecules (5 atomia) | Atomipohjat graafiin + nopea viitetoteutus (6.3) |
 | Visual Flow Engine (partikkelit, kassasäiliö) | Kanvaasin animaatiokerros. Säiliö säilyy L0:n kassasolmussa ja Raha-linssissä. |
@@ -540,11 +572,11 @@ Nykyiset `FlowCommand`-komennot käännetään graafikomennoiksi adapterilla, jo
 
 ---
 
-## 9. Kuiluanalyysi: nykyinen koodi → v3.0
+## 9. Kuiluanalyysi: nykyinen koodi → v3.1
 
 ### 9.1 Säilytetään ja laajennetaan (Flow)
 
-| Tiedosto | Rooli v3.0:ssa | Muutos |
+| Tiedosto | Rooli v3.1:ssä | Muutos |
 | :-- | :-- | :-- |
 | `flow/kernel/atoms.ts`, `simulate.ts`, `stress.ts`, `events.ts`, `sensitivity.ts` | Atomien viitetoteutus, kipurajat, vaihteluvälit | `atomToSubgraph`-adapteri, stressi ja Monte Carlo yleistyvät FactorNodeille |
 | `flow/kernel/types.ts` | `Provenance`, `BusinessEvent` | Siirtyy osin `graph/types.ts`:ään |
@@ -590,6 +622,8 @@ Nykyiset `FlowCommand`-komennot käännetään graafikomennoiksi adapterilla, jo
 | Classicin paneelit sidottu `WorldState`:een, kovakoodattu suomi | Keskikokoinen | Uudelleenkirjoitus graafidataan, ulkoasu Classicista, vaihe 1 (tilapäisesti atomidatalla) ja vaihe 4 (graafidata) |
 | Genesis on yhden lauseen tulkki, ei 8 vaihetta | Keskikokoinen | Vaihe 3 |
 | IT- ja organisaatiomekanismit puuttuvat | Keskikokoinen | Vaihe 4 |
+| Kypsyystasot: nykyinen malli olettaa aina valmiin yrityksen, ei keskeneräistä | Suuri | V2: `maturity`, `definition`, `BusinessCapability` tyyppeihin. V3: `gaps.ts`, kyvykkyysmalli dataksi (`src/flow/graph/capabilities/`), Genesis ja kääntäjä tasoportilla. V1: persoonan oletustaso ja kyvykkyyskartta-näkymä |
+| Nykyinen `launchpad.ts` ja `genesis.ts` olettavat toimivan yrityksen | Keskikokoinen | Muutetaan tasoriippuviksi (V3). Perustamislista toimii tasolla 2–3, tasolla 0–1 sitä vastaa aukkoanalyysi |
 | Tallenteiden migraatio (v1-molekyyli → v3-graafi) | Pieni | `migrateMoleculeToGraph` vaiheessa 2 |
 
 ---
@@ -604,6 +638,12 @@ Nykyiset `FlowCommand`-komennot käännetään graafikomennoiksi adapterilla, jo
   - zoom ja niputus (koostevirta = lehtivirtojen summa),
   - komennot ja kumoaminen,
   - agnostisuustesti: skeema- ja kääntäjätiedostoissa ei toimialasanalistan sanoja.
+- **Kypsyystestit (v3.1):**
+  - taso 0 -malli: ei prosessisolmuja eikä simulaatiota, ja aukkoyhteenveto syntyy ilman koodimuutoksia vähintään kolmella toisistaan poikkeavalla datapohjalla;
+  - `named`/`unknown`-solmut eivät vaikuta yhteenvetolukuihin, ja raportti listaa ne erikseen;
+  - tason nosto ja lasku on kumottavissa eikä poista syötettyä tietoa;
+  - migraatio: vanha malli → `maturity: 3`, kaikki `defined`, kultaiset testit ennallaan;
+  - agnostisuustesti kattaa myös kyvykkyysmallin koodin (data saa sisältää toimialasanoja, koodi ei).
 - **Selaintestit:** CDP-ajot jokaisesta vyöhykkeestä, zoomista ja linssistä. Konsolin on oltava puhdas.
 
 ---
@@ -617,13 +657,16 @@ Nykyiset `FlowCommand`-komennot käännetään graafikomennoiksi adapterilla, jo
 | Suorituskyky suurilla malleilla | Keskisuuri | Keskisuuri | Budjetti 6.4, Web Worker, kuukausitason likiarvo |
 | Laajuus kasvaa yli toteutuskyvyn | Suuri | Suuri | Vaiheistus, jokaisen vaiheen jälkeen toimiva sovellus, Classic poistetaan vasta lopuksi |
 | Monimutkaisuus palaa käyttöliittymään ("ERP-ähky") | Keskisuuri | Suuri | P2 ja P3 sitovina, L1-oletus, tiheys zoomin mukaan |
+| Studio tarjoaa keskeneräisen mallin "vakuuttavana" valmiina yrityksenä (väärä turvallisuuden tunne) | Keskisuuri | Suuri | `named`/`unknown`-solmut näkyvät selvästi, simulaatio ohittaa ne, raportti kertoo mitä ei laskettu |
+| Kyvykkyysmallin datapohja on puutteellinen tai väärä (esim. sääntelyvaatimukset) | Keskisuuri | Suuri | Pohjissa lähde ja päivämäärä, merkintä "ei oikeudellista neuvontaa", käyttäjä voi muokata. Pohjat ovat dataa ja päivitettävissä ilman koodimuutosta |
+| Business Technology Standardin / APQC:n lisenssi | Pieni | Pieni | Oma yleinen luokitus oletuksena, `canonicalRef` valinnainen |
 | APQC-taksonomian lisenssi | Pieni | Pieni | `canonicalRef` valinnainen, ei upoteta ilman ehtojen tarkistusta |
 
 ---
 
 ## 12. Tarkennukset ja korjaukset saapuneeseen spesifikaatioon
 
-| # | Design Log | v3.0-päätös | Perustelu |
+| # | Design Log / lähde | v3.1-päätös | Perustelu |
 | :-: | :-- | :-- | :-- |
 | 1 | Sidotaan Flow-ydin `src/core/engine`-fysiikkaan | **Ei sidota.** Classicin mekaniikat siirretään graafimoottoriin, pääkirja irrotetaan. | Classic-moottori olettaa kiinteän `WorldState`-muodon, mikä on ristiriidassa agnostisuuden (P1) kanssa. Sitominen veisi jäykkyyden uuteen ytimeen. |
 | 2 | Classicin paneelit integroidaan `app.ts`:ään | Ulkoasu ja rakenne siirretään, data ja tekstit kirjoitetaan uudelleen | Paneelit lukevat `WorldState`:a, ja niissä on kovakoodattua suomea (P7) |
@@ -636,6 +679,7 @@ Nykyiset `FlowCommand`-komennot käännetään graafikomennoiksi adapterilla, jo
 | 9 | APQC 13 kategoriaa pohjana | Valinnainen `canonicalRef`. Rakenne syntyy ontologiasta. | Agnostisuus ja lisenssi |
 | 10 | Kääntäjä 5 vai 6 vaihetta (Design Log esitti molemmat) | 6 vaihetta (luku 4.2) | Indeksointi ja kalibrointi omaksi vaiheekseen |
 | 11 | Esimerkkien (nakkikioski, SaaS, konsultointi, tehdas) nimet | Vain testi- ja esimerkkidatassa | P1 |
+| 12 | Genesis päättyy aina "Generate End-to-End Business Operations" | Kypsyystasoportti: end-to-end on tason 3 valinta, ei oletus (4.2 vaihe 0, 4.4) | Idea-vaiheen suunnittelija ei voi saada valmista yritystä, jota ei ole vielä päätetty |
 
 ---
 
@@ -648,7 +692,11 @@ Nykyiset `FlowCommand`-komennot käännetään graafikomennoiksi adapterilla, jo
 | **Koostesolmu** | Solmu, jonka luvut lasketaan lapsista |
 | **Koostevirta** | Niputettu virta, joka koostuu lehtivirroista |
 | **FactorNode** | Mikä tahansa luku: vakio, vipu, kaava tai ulkoinen signaali |
-| **Kyvykkyys** | Rooli, järjestelmä tai resurssi, joka kytketään M-porttiin |
+| **Kyvykkyys (`Capability`)** | Mekanismi: rooli, järjestelmä tai resurssi, joka kytketään M-porttiin |
+| **Liiketoimintakyvykkyys (`BusinessCapability`)** | Mitä yrityksen pitää osata toimiakseen (esim. tuotekehitys, hankinta, sääntelyn hallinta). Taso 0–1 rakentuu näistä. Eri asia kuin `Capability` |
+| **Kypsyystaso (`maturity`)** | 0 Idea, 1 Konsepti, 2 Toimintamalli, 3 Toiminta. Määrää mitä Studio avaa |
+| **Aukkoanalyysi (`gaps.ts`)** | Luettelo kyvykkyyksistä, joiden tila on `unclear` tai `missing`, perusteluineen ja seurauksineen |
+| **`named` / `unknown`** | Solmun määrittelyaste: nimetty ilman sisältöä / tiedetään tarvittavan, ei tiedetä miten. Simulaatio ohittaa |
 | **Tick** | Simulaation aika-askel (oletus päivä) |
 | **Kalibroitu purku** | Solmun purku lapsiksi niin, että tulokset eivät hyppää |
 | **Varjoajo** | Uusi moottori ajetaan vanhan rinnalla ja tuloksia verrataan |
