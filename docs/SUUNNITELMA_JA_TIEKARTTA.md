@@ -148,22 +148,33 @@ Tekstejä on nyt noin 400, ja jokainen uusi ominaisuus lisää niitä. Mitä my�
 
 ---
 
-## 4. Tiekartta (hyväksytty 22.10.2026)
+## 4. Tiekartta v3.0 (päivitetty 23.10.2026)
+
+> [!NOTE]
+> **v2-perusta (vaiheet 1–14) on valmis** ja GitHubissa (85/85 testiä). v3.0 rakentuu sen päälle eikä hylkää mitään: atomiydin, kaavat, herkkyys, valmentaja, tuonti, kielituki ja widgetit säilyvät. Tekninen määrittely: `docs/APEX_TECHNICAL_SPECIFICATION_DOCUMENT.md` (v3.0-PRO-SPEC).
+
+### v2-perusta (valmis)
 
 | Vaihe | Nimi | Tila |
 | :-: | :-- | :-- |
-| 1–7 | Virtanäkymä, paneelit, kipurajat, atomimalli, tiliotteen tuonti, perustamislista, roolit | ✅ Valmis |
-| 8 | Valmentaja ja keskustelu, joka muuttaa mallia tarkistetuilla komennoilla | ✅ Valmis |
-| 9 | Kielituki FI / EN: suomi lähteenä, englanti työkalulla, varakielenä suomi | ✅ Valmis |
-| 10 | APEX Studio: yksi sovellus, nimet ja reitit, liikeidea omin sanoin → malli | ✅ Valmis |
-| 11 | Prompt-to-widget: omat widgetit omalla API-avaimella, päälle/pois-kytkimet, kuvauspohjainen (ei ajettavaa koodia) | ✅ Valmis |
-| 12 | Skenaariot ja aikakone (A/B, vaihteluvälit), yrittäjän jaksaminen, osa-alueiden tavoitteet, opiskelijan tehtävät | ✅ Valmis |
-| 13 | Neuvonantajat, markkinatieto lähteineen, lukujen alkuperä, raportti, toteuma vs. suunnitelma | ✅ Valmis |
-| 14 | Sesongit ja kriisit | ✅ Valmis |
-| 15 | Pilvi, käyttäjätilit ja pysyvä muisti, neuvojan asiakasmallit | |
-| 16 | War Roomin poisto, päätös toimitusketjumoduulista | |
-| 17 | Kirjanpitorajapinnat (Procountor, Netvisor) | |
-| – | Kaupallistaminen | myöhemmin; sitä ennen omaa ja tuttujen testausta jatkuvasti |
+| 1–8 | Virtanäkymä, paneelit, kipurajat, atomimalli, tiliotteen tuonti, perustamislista, roolit, valmentaja | ✅ |
+| 9–11 | Kielituki FI/EN, APEX Studio yhtenä sovelluksena, prompt-to-widget | ✅ |
+| 12–14 | Skenaariot ja Monte Carlo, neuvonantajat, lukujen alkuperä, raportti, toteuma, sesongit ja kriisit | ✅ |
+
+### v3.0-tiekartta: APEX Studio yhtenäiseksi
+
+| Vaihe | Nimi | Sisältö | Hyväksymisehto |
+| :-: | :-- | :-- | :-- |
+| **V1** | Käyttöliittymän yhdistäminen | 5-vyöhykkeinen kuori (komentopalkki, navigaattori, kangas, tarkastelija, aikajana). Classic-väritokenit Studioon. Classicin rahoitus-, operaatio- ja organisaatiopaneelien ulkoasu siirretään Studioon, toistaiseksi atomidatan päällä. Tekstit `t()`:n kautta. | Kaikki nykyiset toiminnot toimivat uudessa kuoressa. FI/EN toimii. Vanhat testit vihreinä. |
+| **V2** | Universaali prosessigraafi | `src/flow/graph/`: solmut (L0–L5), ICOM-portit, hierarkkiset virrat, `EntityURI`-rekisteri, validointi, simulaattori ja pääkirja (eriytetään `core/engine/ledger.ts`:stä). `atomToSubgraph` + vanhojen mallien siirto. Semanttinen zoom solmuille ja virroille. | Golden-testit: graafi vs. atomiydin neljällä esimerkkimallilla, ero ≤ 0,5 %. Tase täsmää joka kuukausi. 300 lehtisolmua × 360 kk < 16 ms (muuten Web Worker). |
+| **V3** | Genesis-to-Operations | 8 vaihetta (ongelma → ratkaisu → markkina → asiakkaat → hankinta → ansaintamalli → kyvykkyydet → topologia ja hallinto) ja 6-portainen deterministinen kääntäjä. Perustamislista muuttuu hallintotehtäviksi, jotka kytkeytyvät solmujen fysiikkaan. | Sama syöte tuottaa aina saman graafin. Ei toimialaoletuksia koodissa (testi). |
+| **V4** | Mekanismit, linssit ja roolit | IT-järjestelmät, roolit ja resurssit solmujen mekanismiportteihin. 4 X-Ray-linssiä (operaatiot, kate-Sankey, IT ja data, organisaatio ja vastuut). Persona-HUD ja osa-alueen rajaus (subsystem scoping). | Linssit näyttävät saman graafin eri tavoin ilman eri dataa. Osa-aluejohtaja näkee vain oman alueensa ja sen rajapinnat. |
+| **V5** | Älykäs muokkaus ja analyysi graafilla | Valmentajan muutokset `GraphCommand`-komennoiksi (tarkistetut, kumottavat). Tuonti pääkirjaan ja solmuille. Herkkyys, stressi ja Monte Carlo graafin kertoimille. Widgetit lukevat `EntityURI`-viitteitä. | Tekoäly ei koskaan aja koodia. Jokainen muutos on kumottavissa ja näkyy alkuperätiedoissa. |
+| **V6** | Classicin poisto | `/classic`-reitti, `src/app/`, `src/components/` ja `src/core/` poistetaan, kun korvaavat testit ovat vihreinä. | Kaikki Classicin ominaisuudet löytyvät Studiosta. |
+| **V7** | Pilvi ja integraatiot | Käyttäjätilit, eristetyt instanssit ja pysyvä muisti, neuvojan asiakasmallit. Kirjanpito- ja ERP-rajapinnat (Procountor, Netvisor ym.). | Tiedot eristetty käyttäjittäin. |
+| – | Kaupallistaminen | Myöhemmin. Sitä ennen jatkuvaa omaa ja tuttujen testausta. | |
+
+**Sääntö joka vaiheessa:** toimialaan tai kokoluokkaan lukittuja oletuksia ei saa olla koodissa (esimerkit ovat vain dataa), kaikki testit pysyvät vihreinä, ja jokainen vaihe viedään GitHubiin omana committinaan.
 
 ### Vaihe 11: Prompt-to-widget
 
@@ -192,6 +203,7 @@ Käyttäjä pyytää omin sanoin uutta toimintoa, ja kielimalli palauttaa **widg
 | Nimi War Roomin tilalle | **APEX Studio** ✅ |
 | Pilotti | **Poistettu** tiekartasta: rakennetaan mahdollisimman pitkälle, testataan itse ja tuttujen kesken, kaupallistetaan myöhemmin ✅ |
 | Prompt-to-widget | **Vaihe 11** ✅ |
-| Kielituen toteutustapa | Kirjoita kerran suomeksi, englanti työkalulla, varakieli suomi. Odottaa hyväksyntääsi. |
+| Kielituen toteutustapa | Kirjoita kerran suomeksi, englanti työkalulla, varakieli suomi ✅ |
+| v3.0-arkkitehtuuri | Universaali prosessigraafi `src/flow/graph/`, ei sidosta `src/core/engine`:en, Classic poistuu vaiheessa V6 ✅ |
 
-Seuraava askel on vaihe 9 (kielituki), kun hyväksyt kielituen toteutustavan ja annat luvan aloittaa koodauksen.
+Seuraava askel: vaiheet V1 (käyttöliittymän yhdistäminen) ja V2 (prosessigraafi).
