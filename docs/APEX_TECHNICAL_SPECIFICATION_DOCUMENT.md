@@ -1,6 +1,6 @@
 # APEX Studio – Technical Specification Document (TSD)
 
-**Versio:** 3.0-PRO-SPEC · **Päivämäärä:** 23.10.2026 · **Korvaa:** v2.4-PRO-SPEC
+**Versio:** 3.1-PRO-SPEC · **Päivämäärä:** 23.10.2026 · **Korvaa:** v2.4-PRO-SPEC (v3.1 lisää kypsyystasot, kohta 4.4)
 **Tila:** Hyväksyttäväksi. Vaiheiden 1–2 toteutus voi alkaa hyväksynnän jälkeen.
 **Koodipohja, josta analyysi on tehty:** `bjorkmeister/Apex` @ `6c974ce` (85/85 testiä läpi)
 
@@ -411,6 +411,46 @@ Design Login kolme operaatiota toteutetaan graafikomentoina (`GraphCommand`, luk
 - **Ylennys:** lapsisolmu siirretään ylemmälle tasolle (esim. tehtävästä osastoksi).
 - **Monistus:** alipuu kopioidaan N kertaa (esim. toimipisteet tai kanavat), ja kopiot jakavat yhteiset ylävirran puskurit.
 - **Kehityspohjat** (Design Log: Structural Evolution Blueprints) ovat datapaketteja, joita valmentaja tarjoaa, kun pullonkaula on rakenteellinen.
+
+---
+
+### 4.4 Kypsyystaso (`VentureMaturity`): Studio ei avaa enempää kuin mitä on päätetty
+
+**Ongelma, jonka v3.0 ratkaisi puutteellisesti:** kohdan 4.2 kääntäjä tuottaa aina koko end-to-end-graafin. Henkilö, joka vasta suunnittelee liikeideaa (esim. uusi tuotebrändi), ei tiedä vielä mitä yritys tekee, joten ostojen, myynnin ja tuotannon avaaminen on väärin. Studion pitää sen sijaan auttaa rakentamaan ne osat, joita yrityksen toimiminen vaatii, ja näyttää mitkä puuttuvat.
+
+**Kypsyystaso on mallin ominaisuus** (`graph.maturity`), ja se rajaa mitä kääntäjä tuottaa ja mitä käyttöliittymä näyttää:
+
+| Taso | Nimi | Graafissa | Studio tekee |
+| :-: | :-- | :-- | :-- |
+| 0 | **Idea** | Vain L0-juuri ja **kyvykkyyskartta** (kyvykkyydet nimettyinä, ei prosesseja) | Ohjattu kysely. Jokaiselle kyvykkyydelle tila: `tiedossa`, `epäselvä` tai `puuttuu` |
+| 1 | **Konsepti** | Valittujen kyvykkyyksien sisäinen suunnittelu (esim. tuotekehitys, hankinta, sääntely, rahoitus) | Selkokielinen yhteenveto: puuttuvat osat, kulut, uhat, huomioitavat asiat ja valmistautumislista |
+| 2 | **Toimintamalli** | Prosessit hahmoteltu (solmut ja virrat), mutta osa määrittelemättä | Ohjattu prosessisuunnittelu. Aukkoanalyysi: mitä yritys vielä tarvitsee toimiakseen |
+| 3 | **Toiminta** | Koko end-to-end-graafi, simulointi päällä | Kohdan 4.2 kääntäjä sellaisenaan |
+
+**Säännöt:**
+1. **Keskeneräisyys on sallittu graafissa.** Solmun `definition` on `defined`, `named` (nimetty, ei sisältöä) tai `unknown`. Simulaattori ei laske `named`- tai `unknown`-solmuja oletusarvoilla: ne jätetään pois laskennasta ja raportoidaan selkeästi ("ei laskettu, koska määrittelemätön"). Invarianttitestit (6.5) koskevat vain `defined`-osaa.
+2. **Taso on aina käyttäjän päätös.** Studio voi ehdottaa seuraavaa tasoa ("kyvykkyydet 1–4 on määritelty, haluatko hahmotella prosessit?"), mutta ei nosta tasoa itse.
+3. **Genesis noudattaa tasoa.** Vaiheet 1–8 (4.1) ovat käytettävissä tasosta riippumatta, mutta kääntäjä (4.2) tuottaa vain tason mukaisen graafin. Täyden end-to-end-graafin luominen on tason 3 valinta, ei oletus.
+4. **Aukkoanalyysi (`gaps.ts`):** vertaa kyvykkyyskarttaa kyvykkyysmalliin ja palauttaa luettelon (kyvykkyys, tila, miksi se tarvitaan, mikä sen puuttumisesta seuraa). Sama luettelo ruokkii selkokielistä yhteenvetoa ja perustamislistaa.
+5. **Kyvykkyysmalli ja huomioitavat asiat ovat dataa, eivät koodia.** Pohjat (esim. sääntelyvaatimukset, tyypilliset kulut ja uhat) ladataan data-tiedostoista toimialan ja kokoluokan mukaan. Koodissa ei ole toimialakohtaisia oletuksia (kosmetiikkabrändi, nakkikioski ym. ovat vain esimerkkidataa).
+6. **Kyvykkyysluokituksen lähde:** Business Technology Standardin termistön käyttöoikeus on tarkistettava ennen sen suoraa käyttöä. Siihen asti käytetään omaa yleistä kyvykkyysluokitusta (`src/flow/graph/capabilities/`), joka on yhteensopiva muiden viitekehysten kanssa valinnaisten `canonicalRef`-viitteiden kautta (kuten APQC).
+
+**Persoonien oletuskypsyystasot:**
+
+| Persoona | Oletustaso | Huomio |
+| :-- | :-- | :-- |
+| Opiskelija | 3 valmiilla esimerkkimallilla, tai 0 opetettaessa yritystä alusta | Selityskerros käsitteille (kate, kassavirta, DSO) |
+| Liikeideaa suunnitteleva | **0** | Selkokielinen riski- ja valmistautumisyhteenveto, ei end-to-end-graafia |
+| Toimiva yrittäjä | 3 | Nykyinen toiminta |
+| Osa-aluejohtaja | 3, rajattuna oman alueen alipuuhun | Rajapinnat ulospäin vain virtoina |
+| Toimitusjohtaja, neuvoja, rahoittaja | 3 | |
+
+**Tyyppimuutokset kohtaan 3.3:** `EnterpriseGraph.maturity: 0 | 1 | 2 | 3`; `ProcessNode.definition: "defined" | "named" | "unknown"`; uusi `CapabilityNode` (tila: `known | unclear | missing`, perustelu, riippuvuudet muihin kyvykkyyksiin). Kaikki uudet kentät ovat valinnaisia, jotta nykyiset mallit migroituvat ilman muutoksia (oletus: taso 3, kaikki `defined`).
+
+**Hyväksymisehdot:**
+- Taso 0 -malli ei sisällä yhtään prosessisolmua eikä simulaatiota, ja aukkoyhteenveto tuotetaan kolmella toisistaan poikkeavalla esimerkillä ilman koodimuutoksia.
+- `named`/`unknown`-solmut eivät vaikuta yhteenvetolukuihin, ja raportti kertoo ne erikseen.
+- Tason nosto ja lasku on kumottavissa, eikä poista käyttäjän syöttämää tietoa.
 
 ---
 

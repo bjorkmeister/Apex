@@ -176,6 +176,17 @@ Tekstejä on nyt noin 400, ja jokainen uusi ominaisuus lisää niitä. Mitä my�
 
 **Sääntö joka vaiheessa:** toimialaan tai kokoluokkaan lukittuja oletuksia ei saa olla koodissa (esimerkit ovat vain dataa), kaikki testit pysyvät vihreinä, ja jokainen vaihe viedään GitHubiin omana committinaan.
 
+### Lisäys v3.1: kypsyystasot (hyväksytty 23.10.2026)
+
+Studio ei avaa end-to-end-prosesseja ennen kuin käyttäjä on päättänyt, mitä yritys tekee. Mallilla on kypsyystaso 0 Idea (kyvykkyyskartta), 1 Konsepti, 2 Toimintamalli, 3 Toiminta. Studio näyttää puuttuvat osat (aukkoanalyysi) ja antaa selkokielisen yhteenvedon uhista, kuluista ja huomioitavista asioista. Tason valitsee aina käyttäjä. Tiedot: TSD kohta 4.4.
+
+| Vaihe | Lisäys kypsyystasoista |
+| :-: | :-- |
+| V1 | Persoona valitsee oletustason (suunnittelija 0, yrittäjä ja johtaja 3). Käsiteselitykset opiskelijalle. |
+| V2 | `maturity`, `definition` (defined/named/unknown) ja `CapabilityNode` graafin tyyppeihin alusta asti. Simulaattori ohittaa määrittelemättömät solmut. |
+| V3 | Genesis ja kääntäjä noudattavat tasoa. Kyvykkyysmalli ja huomioitavien asioiden pohjat dataa. `gaps.ts` ja selkokielinen yhteenveto. Täysi end-to-end on tason 3 valinta. |
+| V4 | Kyvykkyyslinssi (taso 0–1) ja osastojohtajan rajaus toimivat kaikilla tasoilla. |
+
 ### Vaihe 11: Prompt-to-widget
 
 Käyttäjä pyytää omin sanoin uutta toimintoa, ja kielimalli palauttaa **widgetin kuvauksen** (JSON), ei ohjelmakoodia. Kuvauksen piirtää meidän oma tarkistettu koodimme valmiista palikoista. Näin kielimallin virhe tai manipulointi ei pääse käsiksi käyttäjän tietoihin tai API-avaimeen.
