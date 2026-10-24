@@ -26,6 +26,11 @@ import { migrateMoleculeToGraph } from "../graph/migrate.ts";
 import { buildRegistry, type EntityRegistry } from "../graph/registry.ts";
 import { simulateGraph, type SimulationRun } from "../graph/simulate.ts";
 import { buildBusinessCapabilitiesFromTemplate, selectCapabilityTemplate } from "../graph/gaps.ts";
+import {
+  applyOptimisticPatch,
+  setRootScope,
+  type OptimisticDraftSpec,
+} from "../graph/optimistic.ts";
 import type { FlowView, NodeId } from "../model/view.ts";
 import { leversFor, type Lever } from "../model/levers.ts";
 import { atomPriceTolerance, hireBreakEven } from "../kernel/sensitivity.ts";
@@ -48,6 +53,8 @@ export interface StudioGraphOverrides {
   bizCapStatuses?: Record<string, "known" | "unclear" | "missing">;
   customPorts?: Record<string, Port[]>;
   templateId?: string;
+  scopeRootUri?: EntityURI | null;
+  optimisticDrafts?: { request: string; draft: OptimisticDraftSpec }[];
 }
 
 export interface StudioGraphState {
@@ -428,9 +435,14 @@ export function buildStudioGraphState(
     }
   }
 
-  const registry = buildRegistry(graph);
-  const run = simulateGraph(graph, { registry });
-  return { graph, registry, run };
+  let finalGraph = overrides.scopeRootUri ? setRootScope(graph, overrides.scopeRootUri) : graph;
+  for (const item of overrides.optimisticDrafts ?? []) {
+    finalGraph = applyOptimisticPatch(finalGraph, item.request, item.draft).graph;
+  }
+
+  const registry = buildRegistry(finalGraph);
+  const run = simulateGraph(finalGraph, { registry });
+  return { graph: finalGraph, registry, run };
 }
 
 /**

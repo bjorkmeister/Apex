@@ -20,6 +20,7 @@ import type {
   Capability,
   EnterpriseGraph,
   EntityURI,
+  Port,
   UniversalEnterpriseNode,
 } from "../graph/types.ts";
 import type { SimulationRun } from "../graph/simulate.ts";
@@ -292,13 +293,443 @@ export function computeBundledStreams(
   }));
 }
 
+export interface XRayNodeProjection {
+  uri: EntityURI;
+  name: string;
+  lens: XRayLensId;
+  colorToken: string;
+  borderStyle: "solid" | "dashed";
+  badgeText: string;
+  // Ops Flow
+  utilization: number;
+  isBottleneck: boolean;
+  wipQueue: number;
+  waitTicks: number;
+  // Financial Margin (Sankey)
+  revenuePerTick: number;
+  costPerTick: number;
+  marginPerTick: number;
+  marginPct: number;
+  marginErosionPerTick: number;
+  erosionSources: string[];
+  // IT & Data
+  automationLevel: "manual" | "spreadsheet" | "integrated";
+  systemCount: number;
+  rekeyingDebtCount: number;
+  // Org & Accountability
+  ownerUri: EntityURI | null;
+  ownerName: string;
+  orgUnit: string | null;
+  raciGap: boolean;
+  fteLoad: number;
+  fteOverload: boolean;
+  // Ghost isolation
+  isGhost: boolean;
+}
+
+export interface XRayStreamProjection {
+  uri: EntityURI;
+  from: EntityURI;
+  to: EntityURI;
+  lens: XRayLensId;
+  flowWeight: number;
+  strokeWidth: number;
+  unitLabel: string;
+  rekeyingDebt: boolean;
+  isCrossUnitHandoff: boolean;
+  isStubOrGhost: boolean;
+}
+
+export interface XRayLensProjection {
+  lens: XRayLensId;
+  nodes: Record<string, XRayNodeProjection>;
+  streams: Record<string, XRayStreamProjection>;
+  plannedSystemNeeds: { uri: EntityURI; name: string; layer: string }[];
+}
+
+/**
+ * Projektoi saman `EnterpriseGraph`- ja `SimulationRun`-datan valitun X-Ray-linssin (`ops`, `financial`, `it`, `org`)
+ * läpi muuttamatta koskaan taustalla olevaa graafia tai simulaatiotulosta (TSD 2.3 & 5).
+ */
+export function projectGraphThroughXRayLens(
+  graph: EnterpriseGraph,
+  run: SimulationRun,
+  lens: XRayLensId,
+): XRayLensProjection {
+  const nodes: Record<string, XRayNodeProjection> = {};
+  const streams: Record<string, XRayStreamProjection> = {};
+
+  const getNodeAutomation = (node: UniversalEnterpriseNode): "manual" | "spreadsheet" | "integrated" => {
+    const sysCaps = node.mechanisms
+      .map((m) => graph.capabilities[m.capability])
+      .filter((c): c is Extract<Capability, { kind: "system" }> => c?.kind === "system");
+    if (sysCaps.length === 0) return "manual";
+    if (sysCaps.some((s) => s.layer === "workflow" || s.layer === "integration")) {
+      return "integrated";
+    }
+    return "spreadsheet";
+  };
+
+  const getNodeOrgUnit = (node: UniversalEnterpriseNode): string | null => {
+    if (!node.owner) return null;
+    const ownerCap = graph.capabilities[node.owner];
+    if (ownerCap?.kind === "role") return ownerCap.orgUnit ?? ownerCap.uri;
+    return node.owner;
+  };
+
+  for (const s of Object.values(graph.streams)) {
+    const st = run.streamStates[s.uri];
+    const fromNode = graph.nodes[s.from.node];
+    const toNode = graph.nodes[s.to.node];
+    const isStubOrGhost =
+      s.status === "stub" ||
+      Boolean(fromNode?.ghost) ||
+      Boolean(toNode?.ghost) ||
+      fromNode?.definition === "named" ||
+      toNode?.definition === "named";
+
+    const delivered = isStubOrGhost ? 0 : (st?.delivered ?? 0);
+    const transferCost = isStubOrGhost ? 0 : (st?.transferCost ?? 0);
+    const fromRev = isStubOrGhost ? 0 : (run.nodeStates[s.from.node]?.revenue ?? 0);
+    const monetaryFlow = fromRev > 0 ? fromRev : delivered * 25 + transferCost;
+
+    const fromAuto = fromNode ? getNodeAutomation(fromNode) : "manual";
+    const toAuto = toNode ? getNodeAutomation(toNode) : "manual";
+    const rekeyingDebt = fromAuto === "manual" || toAuto === "manual" || fromAuto !== toAuto;
+
+    const fromOrg = fromNode ? getNodeOrgUnit(fromNode) : null;
+    const toOrg = toNode ? getNodeOrgUnit(toNode) : null;
+    const isCrossUnitHandoff = Boolean(fromOrg && toOrg && fromOrg !== toOrg) || fromNode?.owner !== toNode?.owner;
+
+    const flowWeight =
+      lens === "financial"
+        ? monetaryFlow
+        : lens === "it"
+          ? rekeyingDebt ? 18 : 8
+          : lens === "org"
+            ? isCrossUnitHandoff ? Math.max(12, delivered) : Math.max(4, delivered)
+            : delivered;
+
+    const strokeWidth = Math.min(12, Math.max(2, 2 + Math.log10(Math.max(1, flowWeight)) * 2.5));
+    const unitLabel =
+      lens === "financial"
+        ? `${money(monetaryFlow)}/pv`
+        : lens === "it"
+          ? rekeyingDebt
+            ? t("Uudelleensyöttö / integraatiovelka")
+            : t("Integroitu datavirta")
+          : lens === "org"
+            ? isCrossUnitHandoff
+              ? t("Yksikköluovutus (Handoff)")
+              : t("Sisäinen virta")
+            : `${num(delivered)} yks/pv`;
+
+    streams[s.uri] = {
+      uri: s.uri,
+      from: s.from.node,
+      to: s.to.node,
+      lens,
+      flowWeight,
+      strokeWidth,
+      unitLabel,
+      rekeyingDebt,
+      isCrossUnitHandoff,
+      isStubOrGhost,
+    };
+  }
+
+  for (const node of Object.values(graph.nodes)) {
+    const isGhost = Boolean(node.ghost);
+    const st = isGhost ? undefined : run.nodeStates[node.uri];
+    const utilization = isGhost ? 0 : (st?.utilization ?? 0);
+    const isBottleneck = !isGhost && run.bottleneckNodeUri === node.uri;
+    const wipQueue = isGhost ? 0 : (st?.wip ?? 0);
+    const waitTicks = isGhost ? 0 : (st?.cycleTime ?? 0);
+
+    const revenuePerTick = isGhost ? 0 : (st?.revenue ?? 0);
+    const varCost = isGhost ? 0 : (st?.variableCost ?? 0);
+    const fixCost = isGhost ? 0 : (st?.fixedCost ?? 0);
+    const holdCost = isGhost ? 0 : (st?.holdingCost ?? 0);
+    const fpy = isGhost ? 1 : (st?.firstPassYield ?? 1);
+    const scrapErosion = (1 - fpy) * varCost;
+    const inboundTransferCost = Object.values(graph.streams)
+      .filter((s) => s.to.node === node.uri)
+      .reduce((acc, s) => acc + (isGhost ? 0 : (run.streamStates[s.uri]?.transferCost ?? 0)), 0);
+
+    const costPerTick = varCost + fixCost + holdCost + inboundTransferCost;
+    const marginPerTick = revenuePerTick - costPerTick;
+    const marginPct =
+      revenuePerTick > 0 ? marginPerTick / revenuePerTick : marginPerTick < 0 ? -1 : 0;
+    const marginErosionPerTick = scrapErosion + holdCost + inboundTransferCost;
+    const erosionSources: string[] = [];
+    if (scrapErosion > 0.01) erosionSources.push(t("Hävikki ja laatuvirheet"));
+    if (inboundTransferCost > 0.01) erosionSources.push(t("Siirto- ja transaktiokulut"));
+    if (varCost > 0.01) erosionSources.push(t("Muuttuvat yksikkökulut"));
+
+    const automationLevel = getNodeAutomation(node);
+    const systemCount = node.mechanisms.filter(
+      (m) => graph.capabilities[m.capability]?.kind === "system",
+    ).length;
+    const rekeyingDebtCount = Object.values(streams).filter(
+      (sp) => (sp.to === node.uri || sp.from === node.uri) && sp.rekeyingDebt,
+    ).length;
+
+    const ownerUri = node.owner ?? null;
+    const ownerName = ownerUri
+      ? graph.capabilities[ownerUri]?.name ?? ownerUri
+      : t("Ei vastuuhenkilöä (RACI-aukko)");
+    const orgUnit = getNodeOrgUnit(node);
+    const raciGap = !ownerUri && node.level >= 1;
+    const fteLoad = utilization;
+    const fteOverload = fteLoad > 0.85;
+
+    let colorToken = "var(--st-healthy)";
+    let borderStyle: "solid" | "dashed" = isGhost ? "dashed" : "solid";
+    let badgeText = "";
+
+    if (lens === "ops") {
+      if (isBottleneck || utilization > 0.95) {
+        colorToken = "var(--st-critical)";
+        badgeText = isBottleneck ? t("ToC-pullonkaula") : t("Ylikuorma > 95 %");
+      } else if (utilization > 0.85) {
+        colorToken = "var(--st-warning)";
+        badgeText = t("Jono kasvaa (> 85 %)");
+      } else {
+        colorToken = "var(--st-healthy)";
+        badgeText = t("Virtaus tasapainossa");
+      }
+    } else if (lens === "financial") {
+      if (marginPerTick < 0 || marginPct < 0) {
+        colorToken = "var(--st-critical)";
+        badgeText = t("Negatiivinen kate");
+      } else if (marginPct < 0.2 || marginErosionPerTick > 0) {
+        colorToken = "var(--st-warning)";
+        badgeText = t("Katevuoto havaittu");
+      } else {
+        colorToken = "var(--st-healthy)";
+        badgeText = `${t("Kate")} ${pct(marginPct)}`;
+      }
+    } else if (lens === "it") {
+      if (automationLevel === "manual") {
+        colorToken = "var(--st-critical)";
+        borderStyle = "dashed";
+        badgeText = t("Manuaalinen (integraatiovelka)");
+      } else if (automationLevel === "spreadsheet") {
+        colorToken = "var(--st-warning)";
+        badgeText = t("Taulukko / erillisjärjestelmä");
+      } else {
+        colorToken = "var(--lens-it)";
+        badgeText = t("Integroitu automaatio");
+      }
+    } else if (lens === "org") {
+      if (raciGap || fteLoad > 0.95) {
+        colorToken = "var(--st-critical)";
+        badgeText = raciGap ? t("RACI-aukko (owner puuttuu)") : t("FTE-ylikuorma");
+      } else if (fteOverload) {
+        colorToken = "var(--st-warning)";
+        badgeText = t("FTE-kuormitus > 85 %");
+      } else {
+        colorToken = "var(--lens-org)";
+        badgeText = ownerName;
+      }
+    }
+
+    nodes[node.uri] = {
+      uri: node.uri,
+      name: node.name,
+      lens,
+      colorToken,
+      borderStyle,
+      badgeText,
+      utilization,
+      isBottleneck,
+      wipQueue,
+      waitTicks,
+      revenuePerTick,
+      costPerTick,
+      marginPerTick,
+      marginPct,
+      marginErosionPerTick,
+      erosionSources,
+      automationLevel,
+      systemCount,
+      rekeyingDebtCount,
+      ownerUri,
+      ownerName,
+      orgUnit,
+      raciGap,
+      fteLoad,
+      fteOverload,
+      isGhost,
+    };
+  }
+
+  const plannedSystemNeeds = Object.values(graph.capabilities)
+    .filter((c): c is Extract<Capability, { kind: "system" }> => c.kind === "system")
+    .map((s) => ({
+      uri: s.uri,
+      name: s.name,
+      layer: s.layer,
+    }));
+
+  return {
+    lens,
+    nodes,
+    streams,
+    plannedSystemNeeds,
+  };
+}
+
+export interface ScopedBoundaryInterface {
+  streamUri: EntityURI;
+  direction: "inbound" | "outbound";
+  externalNodeUri: EntityURI;
+  externalNodeName: string;
+  internalNodeUri: EntityURI;
+  internalPortId: string;
+  deliveredPerTick: number;
+}
+
+export interface SubsystemScopeView {
+  isScoped: boolean;
+  scopeRootUri: EntityURI;
+  scopeRootName: string;
+  scopedNodeUris: Set<EntityURI>;
+  externalBoundaryPorts: Port[];
+  externalBoundaryStreams: ScopedBoundaryInterface[];
+  breadcrumb: { uri: EntityURI; name: string; level: number }[];
+  scopedKpis: {
+    throughputPerTick: number;
+    avgUtilization: number;
+    revenuePerTick: number;
+    costPerTick: number;
+    marginPerTick: number;
+    activeGhostCount: number;
+  };
+}
+
+/**
+ * Laskee Subsystem Scoping -näkymän (`set_root_scope`, TSD 2.5):
+ * Rajaa kanvaasin ja Persona HUD:n valittuun alipuuhun (`scopeRootUri`), nostaa sen ICOM-portit
+ * ulkoisiksi rajapinnoiksi ja muodostaa murupolun koko yrityksen juureen (`L0`).
+ */
+export function computeSubsystemScope(
+  graph: EnterpriseGraph,
+  run: SimulationRun,
+  scopeRootUri?: EntityURI | null,
+): SubsystemScopeView {
+  const effectiveUri =
+    scopeRootUri && graph.nodes[scopeRootUri]
+      ? scopeRootUri
+      : graph.scopeRoot && graph.nodes[graph.scopeRoot]
+        ? graph.scopeRoot
+        : graph.root;
+
+  const isScoped = effectiveUri !== graph.root;
+  const rootNode = graph.nodes[effectiveUri] ?? graph.nodes[graph.root]!;
+
+  // Kerää alipuun solmut rekursiivisesti
+  const scopedNodeUris = new Set<EntityURI>();
+  const collectSubtree = (uri: EntityURI): void => {
+    if (scopedNodeUris.has(uri)) return;
+    scopedNodeUris.add(uri);
+    const n = graph.nodes[uri];
+    if (!n) return;
+    for (const ch of n.children) {
+      collectSubtree(ch);
+    }
+  };
+  collectSubtree(rootNode.uri);
+
+  // Ulkoiset virrat, jotka ylittävät alipuun rajan
+  const externalBoundaryStreams: ScopedBoundaryInterface[] = [];
+  for (const s of Object.values(graph.streams)) {
+    const fromIn = scopedNodeUris.has(s.from.node);
+    const toIn = scopedNodeUris.has(s.to.node);
+    if (!fromIn && toIn) {
+      externalBoundaryStreams.push({
+        streamUri: s.uri,
+        direction: "inbound",
+        externalNodeUri: s.from.node,
+        externalNodeName: graph.nodes[s.from.node]?.name ?? s.from.node,
+        internalNodeUri: s.to.node,
+        internalPortId: s.to.port,
+        deliveredPerTick: run.streamStates[s.uri]?.delivered ?? 0,
+      });
+    } else if (fromIn && !toIn) {
+      externalBoundaryStreams.push({
+        streamUri: s.uri,
+        direction: "outbound",
+        externalNodeUri: s.to.node,
+        externalNodeName: graph.nodes[s.to.node]?.name ?? s.to.node,
+        internalNodeUri: s.from.node,
+        internalPortId: s.from.port,
+        deliveredPerTick: run.streamStates[s.uri]?.delivered ?? 0,
+      });
+    }
+  }
+
+  // Murupolku yrityksen juuresta (`graph.root`) valittuun `effectiveUri`-solmuun
+  const breadcrumb: { uri: EntityURI; name: string; level: number }[] = [];
+  let cur: UniversalEnterpriseNode | undefined = rootNode;
+  while (cur) {
+    breadcrumb.unshift({ uri: cur.uri, name: cur.name, level: cur.level });
+    cur = cur.parent ? graph.nodes[cur.parent] : undefined;
+  }
+
+  // Laske alipuun rajatut KPI-luvut (ilman ghost-solmuja, Invariantti A4 & Override 4)
+  let throughputPerTick = 0;
+  let utilSum = 0;
+  let utilCount = 0;
+  let revenuePerTick = 0;
+  let costPerTick = 0;
+  let activeGhostCount = 0;
+
+  for (const uri of scopedNodeUris) {
+    const n = graph.nodes[uri];
+    if (!n) continue;
+    if (n.ghost) {
+      activeGhostCount += 1;
+      continue;
+    }
+    if (uri === graph.root && scopedNodeUris.size > 1) continue;
+    const st = run.nodeStates[uri];
+    if (!st) continue;
+    throughputPerTick += st.throughput;
+    utilSum += st.utilization;
+    utilCount += 1;
+    revenuePerTick += st.revenue;
+    costPerTick += st.variableCost + st.fixedCost + st.holdingCost;
+  }
+
+  return {
+    isScoped,
+    scopeRootUri: rootNode.uri,
+    scopeRootName: rootNode.name,
+    scopedNodeUris,
+    externalBoundaryPorts: rootNode.ports,
+    externalBoundaryStreams,
+    breadcrumb,
+    scopedKpis: {
+      throughputPerTick,
+      avgUtilization: utilCount > 0 ? utilSum / utilCount : 0,
+      revenuePerTick,
+      costPerTick,
+      marginPerTick: revenuePerTick - costPerTick,
+      activeGhostCount,
+    },
+  };
+}
+
 /**
  * Renderöi kypsyystasojen 0–1 (Idea / Konsepti) `BusinessCapability`-kyvykkyyskartan (TSD 2.3 & 4.4).
  * Korvaa monimutkaisen prosessiketjun selkeällä kyvykkyys-, riippuvuus- ja puutekartalla.
+ * Tasolla 1 (`Konsepti`) IT-linssi näyttää myös suunnitellut järjestelmätarpeet ilman virtoja.
  */
 export function renderCapabilityMapSvg(
   graph: EnterpriseGraph,
   selectedUri?: EntityURI,
+  xrayLens: XRayLensId = "ops",
 ): string {
   const bcs: BusinessCapability[] = Object.values(graph.businessCapabilities ?? {});
   const statusBadge = (status: BusinessCapability["status"]) => {
@@ -307,8 +738,12 @@ export function renderCapabilityMapSvg(
     return { cls: "cap-card-missing", label: t("Puuttuu"), color: "#ef4444" };
   };
 
+  const plannedSystems = Object.values(graph.capabilities).filter(
+    (c): c is Extract<Capability, { kind: "system" }> => c.kind === "system",
+  );
+
   return `
-    <div class="capability-map-stage" data-maturity="${graph.maturity ?? 0}">
+    <div class="capability-map-stage" data-maturity="${graph.maturity ?? 0}" data-xray-lens="${xrayLens}">
       <div class="cap-map-header">
         <div>
           <span class="zone-kicker">${esc(t("Kypsyystaso 0–1 · Liiketoimintakyvykkyyksien suunnittelu"))}</span>
@@ -324,6 +759,15 @@ export function renderCapabilityMapSvg(
           </span>
         </div>
       </div>
+
+      ${
+        xrayLens === "it" && plannedSystems.length > 0
+          ? `<div class="planned-it-banner" style="margin-bottom:10px;padding:8px 12px;border:1px dashed var(--lens-it);border-radius:8px">
+              <strong style="color:var(--lens-it)">${esc(t("Suunnitellut järjestelmätarpeet (Taso 1 · ilman prosessivirtoja)"))}:</strong>
+              <span style="margin-left:8px">${plannedSystems.map((s) => `${esc(t(s.name))} (${esc(s.layer)})`).join(" · ")}</span>
+            </div>`
+          : ""
+      }
 
       <div class="capability-card-grid">
         ${bcs
@@ -385,8 +829,8 @@ export function renderCapabilityMapSvg(
 }
 
 /**
- * Renderöi Zone 3:n ICOM-prosessisolmukaistan, X-Ray-linssinäkymän, Spotlight-eristyksen
- * ja Natural Capability Zoomin M-porttipillerit (TSD 2.4 & 3.5).
+ * Renderöi Zone 3:n ICOM-prosessisolmukaistan, X-Ray-linssinäkymän, Subsystem Scoping -alipuurajauksen,
+ * Spotlight-eristyksen, Ghost-luonnossolmut ja Natural Capability Zoomin M-porttipillerit (TSD 2.4, 2.5, 3.5 & 8.1).
  */
 export function renderIcomProcessOverlayHtml(
   graph: EnterpriseGraph,
@@ -396,26 +840,56 @@ export function renderIcomProcessOverlayHtml(
     xrayLens: XRayLensId;
     selectedUri: EntityURI;
     spotlightParentUri: EntityURI | null;
+    scopeRootUri?: EntityURI | null;
   },
 ): string {
   const maturity = graph.maturity ?? 3;
   if (maturity <= 1) {
-    return renderCapabilityMapSvg(graph, opts.selectedUri);
+    return renderCapabilityMapSvg(graph, opts.selectedUri, opts.xrayLens);
   }
 
   const semanticLevel = zoomLevelForPercent(opts.zoomPct);
   const spotlight = computeSpotlightView(graph, run, opts.spotlightParentUri);
+  const scopeView = computeSubsystemScope(graph, run, opts.scopeRootUri);
+  const lensProj = projectGraphThroughXRayLens(graph, run, opts.xrayLens);
   const activeNodeLevel = spotlight.active ? 2 : semanticLevel;
   const showMechPills = shouldShowMechanismPills(activeNodeLevel, opts.xrayLens);
 
-  // Tiheyssääntö (TSD 2.4): L1-päänäkymä näyttää enintään 8 arvovirtalaatikkoa ja 6 tukilaatikkoa;
-  // L0–L1 näyttää enintään 3 mittaria per solmu, L2+ näyttää kaikki.
-  const valueStreamNodes = Object.values(graph.nodes)
-    .filter((n) => n.level === 1 && n.band === "value_stream")
+  // Tiheyssääntö (TSD 2.4) & Subsystem Scoping (TSD 2.5):
+  // Jos alipuu on rajattu juureksi (`scopeView.isScoped`), näytetään rajattu alipuu.
+  const allVisibleCandidates = Object.values(graph.nodes).filter((n) =>
+    scopeView.isScoped
+      ? scopeView.scopedNodeUris.has(n.uri) && n.uri !== graph.root
+      : n.level === 1,
+  );
+  const valueStreamNodes = allVisibleCandidates
+    .filter((n) => n.band === "value_stream")
     .slice(0, 8);
-  const supportNodes = Object.values(graph.nodes)
-    .filter((n) => n.level === 1 && n.band !== "value_stream")
+  const supportNodes = allVisibleCandidates
+    .filter((n) => n.band !== "value_stream")
     .slice(0, 6);
+
+  const renderScopeBanner = (): string => {
+    if (!scopeView.isScoped) return "";
+    return `
+      <div class="subsystem-scope-banner" data-scope-root="${esc(scopeView.scopeRootUri)}" style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;margin-bottom:8px;background:rgba(59,130,246,0.10);border:1px solid var(--accent-primary);border-radius:8px;flex-wrap:wrap">
+        <div>
+          <span class="zone-kicker">${esc(t("Alipuun rajaus (Subsystem Scope · L0 = valittu osa-alue)"))}</span>
+          <strong style="margin-left:6px">${esc(t(scopeView.scopeRootName))}</strong>
+          <span style="margin-left:10px;font-size:11px;color:var(--text-secondary)">
+            ${esc(t("Ulkoiset ICOM-rajapintaportit:"))}
+            ${scopeView.externalBoundaryPorts.map((p) => `<span class="badge-pill">${esc(p.side)}:${esc(t(p.name))}</span>`).join(" ")}
+          </span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="im-val" style="font-size:11px">${esc(t("Osa-alueen kate/pv"))}: ${money(scopeView.scopedKpis.marginPerTick)}</span>
+          <button type="button" class="btn-ghost btn-xs" data-action="set-root-scope" data-uri="${esc(graph.root)}">
+            ${esc(t("Palaa koko yrityksen juureen (L0)"))}
+          </button>
+        </div>
+      </div>
+    `;
+  };
 
   const renderMechPills = (node: UniversalEnterpriseNode): string => {
     if (!showMechPills || node.mechanisms.length === 0) return "";
@@ -442,14 +916,27 @@ export function renderIcomProcessOverlayHtml(
 
   const renderNodeCard = (node: UniversalEnterpriseNode, isDimmed = false): string => {
     const st = run.nodeStates[node.uri];
-    const util = st?.utilization ?? 0;
-    const isBottleneck = run.bottleneckNodeUri === node.uri;
-    const statusCls =
-      isBottleneck || util > 0.95 ? "icom-crit" : util > 0.8 ? "icom-warn" : "icom-ok";
+    const np = lensProj.nodes[node.uri];
+    const isGhost = Boolean(node.ghost);
+    const util = isGhost ? 0 : (st?.utilization ?? 0);
+    const isBottleneck = !isGhost && run.bottleneckNodeUri === node.uri;
+    const statusCls = isGhost
+      ? "icom-ghost-card"
+      : isBottleneck || util > 0.95
+        ? "icom-crit"
+        : util > 0.85
+          ? "icom-warn"
+          : "icom-ok";
 
     // L0–L1: max 3 mittaria per solmu; L2+ tai röntgenlinssi: kaikki mittarit
     const metrics: { label: string; val: string }[] = [];
-    if (opts.xrayLens === "financial") {
+    if (isGhost) {
+      metrics.push(
+        { label: t("Tila"), val: t("luonnos, odottaa tarkennusta") },
+        { label: t("Kassavaikutus"), val: "0,00 €" },
+        { label: t("Partikkelit"), val: t("Vain visuaalinen") },
+      );
+    } else if (opts.xrayLens === "financial") {
       const margin = (st?.revenue ?? 0) - (st?.variableCost ?? 0) - (st?.fixedCost ?? 0);
       metrics.push(
         { label: t("Tuotto/pv"), val: money(st?.revenue ?? 0) },
@@ -457,18 +944,23 @@ export function renderIcomProcessOverlayHtml(
         { label: t("Kate/pv"), val: money(margin) },
       );
     } else if (opts.xrayLens === "it") {
-      const sysCount = node.mechanisms.filter((m) => graph.capabilities[m.capability]?.kind === "system").length;
+      const autoLabel =
+        np?.automationLevel === "integrated"
+          ? t("Integroitu")
+          : np?.automationLevel === "spreadsheet"
+            ? t("Taulukko")
+            : t("Manuaalinen");
       metrics.push(
-        { label: t("IT-kytkennät"), val: `${sysCount} kpl` },
-        { label: t("Käyttöaste"), val: pct(util) },
-        { label: t("Ensisaanto"), val: pct(st?.firstPassYield ?? 1) },
+        { label: t("Automaatio"), val: autoLabel },
+        { label: t("IT-kytkennät"), val: `${np?.systemCount ?? 0} kpl` },
+        { label: t("Integraatiovelka"), val: `${np?.rekeyingDebtCount ?? 0}` },
       );
     } else if (opts.xrayLens === "org") {
       const ownerName = node.owner ? graph.capabilities[node.owner]?.name ?? node.owner : t("Ei vastuuhenkilöä");
       metrics.push(
         { label: t("Vastuu (A)"), val: t(ownerName) },
-        { label: t("Kuormitus"), val: pct(util) },
-        { label: t("Roolit"), val: `${node.mechanisms.length}` },
+        { label: t("FTE-kuorma"), val: pct(util) },
+        { label: t("RACI"), val: np?.raciGap ? t("RACI-aukko") : "OK" },
       );
     } else {
       metrics.push(
@@ -485,13 +977,22 @@ export function renderIcomProcessOverlayHtml(
     }
 
     const visibleMetrics = activeNodeLevel <= 1 ? metrics.slice(0, 3) : metrics;
-    const styleAttr = isDimmed ? `style="opacity:0.15;pointer-events:none"` : "";
+    const borderCss =
+      isGhost || np?.borderStyle === "dashed"
+        ? `border-style:dashed;border-color:${np?.colorToken ?? "var(--accent-primary)"};`
+        : np?.colorToken
+          ? `border-color:${np.colorToken};`
+          : "";
+    const dimCss = isDimmed ? "opacity:0.15;pointer-events:none;" : "";
+    const styleAttr = borderCss || dimCss ? `style="${borderCss}${dimCss}"` : "";
 
     return `
       <div
         class="icom-node-card ${statusCls} ${opts.selectedUri === node.uri ? "selected" : ""} ${isDimmed ? "spotlight-dimmed" : ""}"
         data-node-uri="${esc(node.uri)}"
         data-node-level="${node.level}"
+        data-ghost="${isGhost ? "true" : "false"}"
+        data-lens-badge="${esc(np?.badgeText ?? "")}"
         ${styleAttr}
       >
         <div class="icom-port-rail icom-rail-top" title="${esc(t("C · Ohjausportit (Control)"))}">
@@ -507,12 +1008,31 @@ export function renderIcomProcessOverlayHtml(
               <strong class="icom-card-title">${esc(t(node.name))}</strong>
               <button
                 class="icom-zoom-in-btn"
+                data-action="set-root-scope"
+                data-uri="${esc(node.uri)}"
+                title="${esc(t("Rajaa tämä osa-alue näkymän juureksi (Subsystem Scope L0)"))}">
+                ⊡
+              </button>
+              <button
+                class="icom-zoom-in-btn"
                 data-action="spotlight-node"
                 data-uri="${esc(node.uri)}"
                 title="${esc(t("Avaa solmu Spotlight-näkymään (L2)"))}">
                 ⌖
               </button>
             </div>
+            ${
+              isGhost && node.ghost
+                ? `<div class="ghost-node-banner" data-visual-only="true" style="font-size:11px;color:var(--accent-primary);margin-bottom:4px;display:flex;align-items:center;justify-content:space-between;gap:6px">
+                    <span>◌ ${esc(t("luonnos, odottaa tarkennusta"))}</span>
+                    <button type="button" class="btn-ghost btn-xs" data-action="rollback-optimistic" data-patch-id="${esc(node.ghost.patchId)}">
+                      ${esc(t("Kumoa luonnos"))}
+                    </button>
+                  </div>`
+                : np?.badgeText
+                  ? `<div class="xray-lens-badge" style="font-size:10px;color:${np.colorToken};margin-bottom:4px">${esc(np.badgeText)}</div>`
+                  : ""
+            }
             <div class="icom-metrics-row">
               ${visibleMetrics
                 .map(
@@ -533,10 +1053,11 @@ export function renderIcomProcessOverlayHtml(
     `;
   };
 
-  if ( semanticLevel === 0 && !spotlight.active ) {
-    const rootNode = graph.nodes[graph.root]!;
+  if (semanticLevel === 0 && !spotlight.active) {
+    const rootNode = graph.nodes[scopeView.scopeRootUri] ?? graph.nodes[graph.root]!;
     return `
       <div class="icom-architecture-deck" data-semantic-level="0" data-xray-lens="${opts.xrayLens}">
+        ${renderScopeBanner()}
         <div class="icom-band-label">${esc(t("Semanttinen zoom L0 (< 25 %) · Koko yritys yhtenä mustana laatikkona"))}</div>
         <div class="icom-node-strip">
           ${renderNodeCard(rootNode, false)}
@@ -551,6 +1072,7 @@ export function renderIcomProcessOverlayHtml(
 
     return `
       <div class="icom-architecture-deck spotlight-mode" data-semantic-level="2" data-xray-lens="${opts.xrayLens}" data-spotlight-parent="${esc(parentNode.uri)}">
+        ${renderScopeBanner()}
         <div class="spotlight-banner">
           <div>
             <span class="zone-kicker">${esc(t("Spotlight-eristys (Invariantti A3 · L2–L5)"))}</span>
@@ -624,6 +1146,7 @@ export function renderIcomProcessOverlayHtml(
 
   return `
     <div class="icom-architecture-deck" data-semantic-level="${semanticLevel}" data-xray-lens="${opts.xrayLens}">
+      ${renderScopeBanner()}
       <div class="icom-band-row">
         <div class="icom-band-head-row" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
           <div class="icom-band-label">${esc(t("Arvovirtakaista (Core Value Stream · L1)"))}</div>

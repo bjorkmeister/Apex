@@ -27,6 +27,8 @@ import { FLOW_CSS } from "../src/flow/server/page.ts";
 import {
   computeBundledStreams,
   computeSpotlightView,
+  computeSubsystemScope,
+  projectGraphThroughXRayLens,
   renderCapabilityMapSvg,
   renderIcomProcessOverlayHtml,
   shouldShowMechanismPills,
@@ -43,6 +45,7 @@ import { withLocale } from "../src/flow/i18n/index.ts";
 import {
   analyzeGaps,
   applyCapabilityTemplate,
+  applyOptimisticPatch,
   buildBalanceSheet,
   buildBusinessCapabilitiesFromTemplate,
   buildCashFlowStatement,
@@ -57,8 +60,12 @@ import {
   createEmptyLedger,
   deterministicHash,
   evaluatePhysicsModule,
+  getPendingOptimisticPatches,
   migrateMoleculeToGraph,
   postJournal,
+  rollbackOptimisticPatch,
+  runShadowPreviewWithDefaults,
+  setRootScope,
   simulateGraph,
   validateGraph,
   verifyLedgerInvariants,
@@ -67,6 +74,10 @@ import {
   type UniversalEnterpriseNode,
   type UniversalGenesisSpec,
 } from "../src/flow/graph/index.ts";
+import {
+  createOptimisticDraftFromIntent,
+  parseGraphIntent,
+} from "../src/flow/model/intent.ts";
 import {
   CAPABILITY_TEMPLATE_LIST,
   EXPERT_SERVICE_CAPABILITY_TEMPLATE,
@@ -1417,3 +1428,183 @@ describe("Tarkistuspiste 3 (Checkpoint V3) — 8-vaiheinen UniversalGenesisSpec,
 function out0_for_lp(): EnterpriseGraph {
   return compileGenesisSpec(ideaToGenesisSpec("Uusi kosmetiikkasarja", 0)).graph;
 }
+
+describe("Tarkistuspiste 4 (Checkpoint V4) — 4 X-Ray-linssiä, Subsystem Scoping (set_root_scope) & Nopeus 2 Optimistinen Ghost-solmu (Invariantti A4)", () => {
+  it("18. 4 X-Ray-linssiä (ops, financial, it, org) projektoivat saman graafin ilman datan muuttumista + Taso 1 IT-järjestelmätarpeet", () => {
+    const mol = createPreset("webshop");
+    const st = buildStudioGraphState(mol, 3);
+    const valNode = Object.values(st.graph.nodes).find((n) => n.level === 1 && n.band === "value_stream")!;
+    const enNode = Object.values(st.graph.nodes).find((n) => n.level === 1 && n.band !== "value_stream")!;
+
+    // Tee kopio varmistaaksemme ettei mikään linssiprojektio muuta graafia tai simulaatiota
+    const graphSnapshotBefore = structuredClone(st.graph);
+    const runSnapshotBefore = structuredClone(st.run);
+
+    const opsProj = projectGraphThroughXRayLens(st.graph, st.run, "ops");
+    const finProj = projectGraphThroughXRayLens(st.graph, st.run, "financial");
+    const itProj = projectGraphThroughXRayLens(st.graph, st.run, "it");
+    const orgProj = projectGraphThroughXRayLens(st.graph, st.run, "org");
+
+    assert.deepEqual(st.graph, graphSnapshotBefore);
+    assert.deepEqual(st.run, runSnapshotBefore);
+
+    // 1. Ops Flow: käyttöaste, jonot ja virran paksuus yksikköä/tick
+    assert.equal(opsProj.lens, "ops");
+    assert.ok(opsProj.nodes[valNode.uri]!.utilization >= 0);
+    assert.ok(opsProj.nodes[valNode.uri]!.colorToken.startsWith("var(--st-"));
+
+    // 2. Financial Margin (Sankey): kate-% ja katevuodon lähteet
+    assert.equal(finProj.lens, "financial");
+    assert.ok(finProj.nodes[valNode.uri]!.revenuePerTick > 0);
+    assert.ok(finProj.nodes[valNode.uri]!.erosionSources.length >= 1);
+
+    // 3. IT & Data: integroitu vs. taulukko vs. manuaalinen (katkoviiva)
+    assert.equal(itProj.lens, "it");
+    assert.equal(itProj.nodes[valNode.uri]!.automationLevel, "integrated");
+    assert.equal(itProj.nodes[enNode.uri]!.automationLevel, "spreadsheet");
+
+    const manualGraph = structuredClone(st.graph);
+    manualGraph.nodes[valNode.uri]!.mechanisms = [];
+    delete manualGraph.nodes[valNode.uri]!.owner;
+    const manualItProj = projectGraphThroughXRayLens(manualGraph, st.run, "it");
+    assert.equal(manualItProj.nodes[valNode.uri]!.automationLevel, "manual");
+    assert.equal(manualItProj.nodes[valNode.uri]!.borderStyle, "dashed");
+    assert.equal(manualItProj.nodes[valNode.uri]!.colorToken, "var(--st-critical)");
+
+    // 4. Org & Accountability: RACI-aukko kun owner puuttuu + yksikköluovutukset
+    const manualOrgProj = projectGraphThroughXRayLens(manualGraph, st.run, "org");
+    assert.equal(manualOrgProj.nodes[valNode.uri]!.raciGap, true);
+    assert.equal(manualOrgProj.nodes[valNode.uri]!.colorToken, "var(--st-critical)");
+    assert.ok(orgProj.nodes[valNode.uri]!.ownerUri !== null);
+
+    // 5. Taso 1 (Konsepti) + IT-linssi näyttää suunnitellut järjestelmätarpeet ilman prosessivirtoja
+    const st1 = buildStudioGraphState(mol, 1);
+    const html1It = renderIcomProcessOverlayHtml(st1.graph, st1.run, {
+      zoomPct: 45,
+      xrayLens: "it",
+      selectedUri: st1.graph.root,
+      spotlightParentUri: null,
+    });
+    assert.ok(html1It.includes("Suunnitellut järjestelmätarpeet (Taso 1 · ilman prosessivirtoja)"));
+  });
+
+  it("19. Subsystem Scoping (set_root_scope): alipuun rajaus, ulkoiset ICOM-rajapintaportit, rajatut KPI:t ja palautus yrityksen juureen (L0)", () => {
+    const mol = createPreset("it_consultant");
+    const firstValUri = Object.values(migrateMoleculeToGraph(mol).nodes).find(
+      (n) => n.level === 1 && n.band === "value_stream",
+    )!.uri;
+
+    // Pilkotaan L1-solmu L2-alivaiheiksi ja rajataan näkymän juureksi (scopeRootUri)
+    const stScoped = buildStudioGraphState(mol, 3, [firstValUri], {
+      scopeRootUri: firstValUri,
+    });
+    assert.equal(stScoped.graph.scopeRoot, firstValUri);
+
+    const scopeView = computeSubsystemScope(stScoped.graph, stScoped.run);
+    assert.equal(scopeView.isScoped, true);
+    assert.equal(scopeView.scopeRootUri, firstValUri);
+    // Alipuussa on valittu L1-solmu + sen 5 L2-alivaihetta = 6 solmua (muut L1-solmut on rajattu ulos)
+    assert.equal(scopeView.scopedNodeUris.size, 6);
+    assert.ok(!scopeView.scopedNodeUris.has(stScoped.graph.root));
+    assert.ok(scopeView.externalBoundaryPorts.some((p) => p.side === "I"));
+    assert.ok(scopeView.externalBoundaryPorts.some((p) => p.side === "O"));
+    assert.ok(scopeView.externalBoundaryPorts.some((p) => p.side === "C"));
+    assert.ok(scopeView.externalBoundaryPorts.some((p) => p.side === "M"));
+    assert.equal(scopeView.breadcrumb[0]!.uri, stScoped.graph.root);
+    assert.equal(scopeView.breadcrumb[scopeView.breadcrumb.length - 1]!.uri, firstValUri);
+
+    // Kanvaasin HTML näyttää Subsystem Scope -palkin, ulkoiset ICOM-rajapintaportit ja paluupainikkeen
+    const scopedHtml = renderIcomProcessOverlayHtml(stScoped.graph, stScoped.run, {
+      zoomPct: 45,
+      xrayLens: "ops",
+      selectedUri: firstValUri,
+      spotlightParentUri: null,
+      scopeRootUri: firstValUri,
+    });
+    assert.ok(scopedHtml.includes("Alipuun rajaus (Subsystem Scope"));
+    assert.ok(scopedHtml.includes("Palaa koko yrityksen juureen (L0)"));
+
+    // Palautus koko yrityksen juureen (setRootScope -> null)
+    const unscopedGraph = setRootScope(stScoped.graph, null);
+    assert.equal(unscopedGraph.scopeRoot, undefined);
+    const unscopeView = computeSubsystemScope(unscopedGraph, stScoped.run);
+    assert.equal(unscopeView.isScoped, false);
+    assert.equal(unscopeView.scopeRootUri, unscopedGraph.root);
+  });
+
+  it("20. Invariantti A4 (Nopeus 2): intent.ts + optimistic.ts luo ghost-solmun < 50 ms, 0,00 € vaikutus kassaan/pääkirjaan, varjoajo ja yhdellä siirtymällä palautuva rollback", () => {
+    const mol = createPreset("it_consultant");
+    const baseState = buildStudioGraphState(mol, 3);
+    const baseGraph = structuredClone(baseState.graph);
+    const baseRun = baseState.run;
+
+    // 1. Ensimmäinen luonnollisen kielen pyyntö -> ghost-solmu < 50 ms ilman kielimallikutsua
+    const t0 = performance.now();
+    const firstDraft = createOptimisticDraftFromIntent(
+      "Lisää uusi yritysasiakkaiden koulutuspalvelu 180 €",
+      baseGraph,
+    );
+    const elapsed1 = performance.now() - t0;
+    assert.ok(elapsed1 < 50, `Ghost-solmun luonti kesti ${elapsed1.toFixed(2)} ms (budjetti < 50 ms)`);
+    assert.equal(firstDraft.patch.status, "pending");
+    assert.equal(firstDraft.patch.ghostNodes.length, 1);
+
+    const ghostUri1 = firstDraft.patch.ghostNodes[0]!;
+    const ghostNode1 = firstDraft.graph.nodes[ghostUri1]!;
+    assert.equal(ghostNode1.definition, "named");
+    assert.equal(ghostNode1.ghost?.status, "pending");
+    assert.equal(ghostNode1.ghost?.patchId, firstDraft.patch.patchId);
+
+    // 2. Toinen avoin pyyntö pinoon (stack support)
+    const secondDraft = applyOptimisticPatch(firstDraft.graph, "Lisää digitaalinen tilauskanava", {
+      name: "Digitaalinen tilauskanava",
+      atom: "recurring_subscription",
+    });
+    assert.equal(getPendingOptimisticPatches(secondDraft.graph).length, 2);
+
+    // 3. Ehdoton eristyssääntö (Kanoninen yliajo 4 & Invariantti 6):
+    // Ghost-solmujen vaikutus oikeaan simulaatioon, kassaan, liikevaihtoon ja pääkirjaan on TÄSMÄLLEEN 0,00 €
+    const runWithGhosts = simulateGraph(secondDraft.graph);
+    assert.equal(runWithGhosts.finalCash, baseRun.finalCash);
+    assert.equal(runWithGhosts.totalNetRevenue, baseRun.totalNetRevenue);
+    assert.equal(runWithGhosts.totalOperatingProfit, baseRun.totalOperatingProfit);
+    assert.equal(
+      runWithGhosts.statements.balanceSheet.totalAssets,
+      baseRun.statements.balanceSheet.totalAssets,
+    );
+    assert.equal(runWithGhosts.nodeStates[ghostUri1]?.computed, false);
+    assert.equal(runWithGhosts.nodeStates[ghostUri1]?.skipReason, "ghost_pending");
+
+    // Kanvaasin HTML piirtää ghost-solmun katkoviivalla, merkinnällä "luonnos, odottaa tarkennusta" ja "0,00 €"
+    const ghostCanvasHtml = renderIcomProcessOverlayHtml(secondDraft.graph, runWithGhosts, {
+      zoomPct: 45,
+      xrayLens: "ops",
+      selectedUri: ghostUri1,
+      spotlightParentUri: null,
+    });
+    assert.ok(ghostCanvasHtml.includes("icom-ghost-card"));
+    assert.ok(ghostCanvasHtml.includes("luonnos, odottaa tarkennusta"));
+    assert.ok(ghostCanvasHtml.includes("0,00 €"));
+    assert.ok(ghostCanvasHtml.includes('data-visual-only="true"'));
+
+    // 4. Varjoajo oletusarvoilla (runShadowPreviewWithDefaults): laskee esikatselun tallentamatta malliin
+    const graphBeforeShadow = structuredClone(secondDraft.graph);
+    const shadow = runShadowPreviewWithDefaults(secondDraft.graph);
+    assert.equal(shadow.isShadowPreview, true);
+    assert.equal(shadow.label, "arvaus, oletusarvoilla");
+    assert.ok(shadow.ghostNodeUris.includes(ghostUri1));
+    assert.equal(shadow.run.nodeStates[ghostUri1]?.computed, true);
+    assert.deepEqual(secondDraft.graph, graphBeforeShadow); // Ei tallentunut malliin!
+
+    // 5. Rollback: kumotaan molemmat luonnokset -> graafi palautuu 100 % identtiseksi baseGraph-tilan kanssa
+    const rb2 = rollbackOptimisticPatch(secondDraft.graph, secondDraft.patch.patchId);
+    assert.equal(rb2.rolledBackPatch?.status, "rolled_back");
+    assert.equal(rb2.remainingPatches.length, 1);
+    assert.deepEqual(rb2.graph, firstDraft.graph);
+
+    const rb1 = rollbackOptimisticPatch(rb2.graph, firstDraft.patch.patchId);
+    assert.equal(rb1.rolledBackPatch?.status, "rolled_back");
+    assert.equal(rb1.remainingPatches.length, 0);
+    assert.deepEqual(rb1.graph, baseGraph);
+  });
+});

@@ -6,6 +6,16 @@
  * ensin; tämä tulkki on varajärjestelmä, joka toimii aina.
  */
 import type { AtomKind, Molecule } from "../kernel/types.ts";
+import type {
+  AtomKind as GraphAtomKind,
+  EnterpriseGraph,
+  NodeBand,
+  OptimisticNodePatch,
+} from "../graph/types.ts";
+import {
+  applyOptimisticPatch,
+  type OptimisticDraftSpec,
+} from "../graph/optimistic.ts";
 import type { FlowCommand } from "./commands.ts";
 import { priceFieldFor } from "./coach.ts";
 import { msg, t } from "../i18n/index.ts";
@@ -148,4 +158,110 @@ export function parseIntent(message: string, m: Molecule): IntentResult {
     };
   }
   return { reply: replies.join(" "), commands, understood: true };
+}
+
+export interface GraphIntentResult {
+  understood: boolean;
+  reply: string;
+  draft: OptimisticDraftSpec;
+}
+
+/**
+ * Nopeus 2 paikallinen luonnostulkki (`parseGraphIntent`, TSD 1.3 A4 & 8.1):
+ * Muodostaa käyttäjän luonnollisen kielen pyynnöstä välittömän paikallisen `OptimisticDraftSpec`-luonnoksen
+ * `< 50 ms` vasteajalla ilman kielimallikutsua.
+ */
+export function parseGraphIntent(
+  message: string,
+  graph: EnterpriseGraph,
+): GraphIntentResult {
+  const clean = message.replace(/\s+/g, " ").trim();
+  const lower = clean.toLowerCase();
+
+  let atom: GraphAtomKind = "time_capacity";
+  let band: NodeBand = "value_stream";
+  let unitUri: "apex://unit/items" | "apex://unit/hours" | "apex://unit/subscribers" | "apex://unit/transactions" =
+    "apex://unit/items";
+
+  if (/kuukausi|tilaus|sopimus|jäsenyy|ylläpito|retainer|subscription|recurring|membership/.test(lower)) {
+    atom = "recurring_subscription";
+    unitUri = "apex://unit/subscribers";
+  } else if (/tuote|valmistu|varasto|raaka-aine|tehdas|pakkau|toimittaja|hankin|physical|inventory|product|manufactur|sourcing|supplier/.test(lower)) {
+    atom = "physical_matter";
+    unitUri = "apex://unit/items";
+  } else if (/kanava|myymälä|verkkokaup|kassa|kampanja|liidi|markkinoin|jakelu|channel|store|shop|checkout|funnel|lead/.test(lower)) {
+    atom = "transactional_trade";
+    unitUri = "apex://unit/transactions";
+  } else {
+    atom = "time_capacity";
+    unitUri = "apex://unit/hours";
+  }
+
+  if (/hallinto|tuki|talous|kirjanpito|lakisääte|it-tuki|hr|support|governance|admin|backoffice/.test(lower)) {
+    band = "enabling";
+  }
+
+  // Poimi mahdollinen euromäärä
+  const eurMatch = /(\d+(?:[ ,.]\d+)?)\s*(?:€|eur|euro)/i.exec(clean);
+  const parsedEur = eurMatch ? num(eurMatch[1]!) : 110;
+
+  // Muodosta selkeä nimi pyynnöstä poistamalla aloituskomentosanat
+  const stripped = clean
+    .replace(
+      /^(lisää|luo|rakenna|avaa|käynnistä|kytke|suunnittele|add|create|build|open|launch|connect|design)\s+(uusi\s+|new\s+)?(prosessisolmu\s+|solmu\s+|vaihe\s+|tulovirta\s+|kanava\s+|node\s+|step\s+|stream\s+)?/i,
+      "",
+    )
+    .replace(/\s+\d+(?:[ ,.]\d+)?\s*(?:€|eur|euro).*$/i, "")
+    .trim();
+
+  const rawTitle = stripped.length >= 2 ? stripped : t("Uusi luonnossolmu");
+  const nodeName = rawTitle.charAt(0).toUpperCase() + rawTitle.slice(1);
+
+  const parentUri =
+    graph.scopeRoot && graph.nodes[graph.scopeRoot] ? graph.scopeRoot : graph.root;
+
+  const draft: OptimisticDraftSpec = {
+    name: nodeName,
+    parentUri,
+    band,
+    apqcCategory: band === "value_stream" ? 3.0 : 8.0,
+    atom,
+    unitUri,
+    estimatedUnitPrice: parsedEur,
+    estimatedUnitCost: Math.round(parsedEur * 0.3),
+    estimatedCapacityPerTick: 15,
+    estimatedCycleTicks: 1,
+    estimatedFixedCostPerTick: 12,
+  };
+
+  return {
+    understood: clean.length > 0,
+    reply: t("Loin välittömän paikallisen luonnossolmun '{name}' (luonnos, odottaa tarkennusta). Luonnoksen lukuja ei lasketa kassaan, pääkirjaan eikä KPI-mittareihin ennen vahvistusta.", { name: nodeName }),
+    draft,
+  };
+}
+
+/**
+ * Luo ja kytkee välittömästi paikallisen `OptimisticNodePatch` ghost-solmun käyttäjän luonnollisen
+ * kielen pyynnöstä `< 50 ms` vasteajalla (Nopeus 2, Invariantti A4).
+ */
+export function createOptimisticDraftFromIntent(
+  message: string,
+  graph: EnterpriseGraph,
+): {
+  graph: EnterpriseGraph;
+  patch: OptimisticNodePatch;
+  draft: OptimisticDraftSpec;
+  reply: string;
+  elapsedMs: number;
+} {
+  const parsed = parseGraphIntent(message, graph);
+  const applied = applyOptimisticPatch(graph, message, parsed.draft);
+  return {
+    graph: applied.graph,
+    patch: applied.patch,
+    draft: parsed.draft,
+    reply: parsed.reply,
+    elapsedMs: applied.elapsedMs,
+  };
 }

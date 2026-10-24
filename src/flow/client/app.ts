@@ -739,6 +739,7 @@ function refresh(opts: { levers?: boolean; persist?: boolean } = {}): void {
       xrayLens: state.xrayLens,
       selectedUri: state.selectedUri,
       spotlightParentUri: state.spotlightParentUri,
+      scopeRootUri: state.graphOverrides.scopeRootUri ?? null,
     });
   }
   const canvasHost = $("#fl-canvas");
@@ -1228,6 +1229,27 @@ root.addEventListener("click", (ev) => {
       state.zoomPct = 45;
       refresh();
       return;
+    case "set-root-scope": {
+      const uri = target.dataset.uri as EntityURI | undefined;
+      if (uri) {
+        const rootUri = state.graphState?.graph.root ?? ("apex://node/root" as EntityURI);
+        state.graphOverrides.scopeRootUri =
+          uri === rootUri || state.graphOverrides.scopeRootUri === uri ? null : uri;
+        state.selectedUri = state.graphOverrides.scopeRootUri ?? rootUri;
+        refresh();
+      }
+      return;
+    }
+    case "rollback-optimistic": {
+      const list = state.graphOverrides.optimisticDrafts ?? [];
+      if (list.length > 0) {
+        list.pop();
+        state.graphOverrides.optimisticDrafts = list;
+        refresh();
+        showToast(t("Luonnossolmu kumottu ja palautettu aiempaan tilaan."));
+      }
+      return;
+    }
     case "select-inspector-tab": {
       const tab = target.dataset.tab as InspectorTabId | undefined;
       if (tab) {
