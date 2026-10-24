@@ -9,3 +9,4 @@ export * from "./simulate.ts";
 export * from "./gaps.ts";
 export * from "./compiler.ts";
 export * from "./optimistic.ts";
+export * from "./commands.ts";

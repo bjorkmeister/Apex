@@ -6,6 +6,9 @@
  * jotta tulos pysyy ennallaan. Arvion siitä, onko se realistista, tekee käyttäjä.
  */
 import type { AtomEconomics, Molecule, SimulationResult, TimeCapacityAtom } from "./types.ts";
+import type { EnterpriseGraph, EntityURI } from "../graph/types.ts";
+import { applyGraphCommand } from "../graph/commands.ts";
+import { simulateGraph, type SimulationRun } from "../graph/simulate.ts";
 import { moleculeEconomics, timeCapacityHours, totalFixedCostsPerMonth } from "./atoms.ts";
 import { simulate } from "./simulate.ts";
 import { applyStress, type StressInput } from "./stress.ts";
@@ -263,6 +266,177 @@ export function monteCarlo(molecule: Molecule, ranges: UncertaintyRanges, runs =
   return {
     runs: n,
     ranges,
+    endCash: percentiles(end),
+    minCash: percentiles(min),
+    totalProfit: percentiles(profit),
+    cashOutProbability: cashOut / n,
+    lossProbability: loss / n,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// EnterpriseGraph-tason herkkyys-, kipuraja-, stressitesti- ja Monte Carlo -analyysi (TSD 7)
+// ---------------------------------------------------------------------------
+
+export interface GraphFactorTolerance {
+  factorUri: EntityURI;
+  currentValue: number;
+  newValue: number;
+  deltaRatio: number;
+  baseProfit: number;
+  newProfit: number;
+  profitDelta: number;
+  baseEndCash: number;
+  newEndCash: number;
+  cashDelta: number;
+  /** Jos faktori on hinta tai katekomponentti, kuinka paljon volyymi saa muuttua jotta liikevoitto säilyy. */
+  breakEvenVolumeRatio: number | null;
+  maxVolumeLoss: number | null;
+  requiredVolumeGain: number | null;
+}
+
+export interface GraphStressResult {
+  factorDeltas: Record<EntityURI, number>;
+  base: SimulationRun;
+  stressed: SimulationRun;
+  cashDelta: number;
+  profitDelta: number;
+}
+
+export interface GraphMonteCarloResult {
+  runs: number;
+  factorRanges: Record<EntityURI, number>;
+  endCash: Percentiles;
+  minCash: Percentiles;
+  totalProfit: Percentiles;
+  cashOutProbability: number;
+  lossProbability: number;
+}
+
+/** Muuttaa yksittäisen FactorNode-faktorin arvoa suhteellisesti (deltaRatio) ja synkronoi sen graafiin. */
+export function perturbGraphFactor(graph: EnterpriseGraph, factorUri: EntityURI, deltaRatio: number): EnterpriseGraph {
+  const factor = graph.factors[factorUri];
+  if (!factor) return graph;
+  const newValue = factor.value * (1 + deltaRatio);
+  const next = applyGraphCommand(graph, { type: "set_factor", uri: factorUri, value: newValue });
+  if (factorUri === "apex://factor/credit_openingCash") {
+    next.opening = { ...next.opening, cash: newValue };
+  }
+  return next;
+}
+
+/** Yleinen kipurajalaskenta mille tahansa EnterpriseGraph-graafin FactorNode-faktorille (EntityURI). */
+export function breakEvenTolerance(
+  graph: EnterpriseGraph,
+  factorUri: EntityURI,
+  deltaRatio: number,
+): GraphFactorTolerance {
+  const factor = graph.factors[factorUri];
+  const currentValue = factor?.value ?? 0;
+  const newValue = currentValue * (1 + deltaRatio);
+  const baseRun = simulateGraph(graph);
+  const perturbedGraph = perturbGraphFactor(graph, factorUri, deltaRatio);
+  const newRun = simulateGraph(perturbedGraph);
+
+  const baseProfit = baseRun.totals.operatingProfit;
+  const newProfit = newRun.totals.operatingProfit;
+  const profitDelta = newProfit - baseProfit;
+  const baseEndCash = baseRun.endCash;
+  const newEndCash = newRun.endCash;
+  const cashDelta = newEndCash - baseEndCash;
+
+  const baseRev = baseRun.totals.revenue;
+  const newRev = newRun.totals.revenue;
+  let breakEvenVolumeRatio: number | null = null;
+  let maxVolumeLoss: number | null = null;
+  let requiredVolumeGain: number | null = null;
+
+  if (baseRev > 0 && newRev > 0) {
+    const baseContrib = baseRev - baseRun.totals.variableCosts;
+    const newContrib = newRev - newRun.totals.variableCosts;
+    if (baseContrib > 0 && newContrib > 0) {
+      breakEvenVolumeRatio = baseContrib / newContrib;
+      maxVolumeLoss = breakEvenVolumeRatio <= 1 ? 1 - breakEvenVolumeRatio : null;
+      requiredVolumeGain = breakEvenVolumeRatio > 1 ? breakEvenVolumeRatio - 1 : null;
+    }
+  }
+
+  return {
+    factorUri,
+    currentValue,
+    newValue,
+    deltaRatio,
+    baseProfit,
+    newProfit,
+    profitDelta,
+    baseEndCash,
+    newEndCash,
+    cashDelta,
+    breakEvenVolumeRatio,
+    maxVolumeLoss,
+    requiredVolumeGain,
+  };
+}
+
+export const graphFactorTolerance = breakEvenTolerance;
+
+/** Ajaa stressitestin mielivaltaisille EnterpriseGraph-faktorimuutoksille (Record<EntityURI, number>). */
+export function graphStressTest(
+  graph: EnterpriseGraph,
+  factorDeltas: Record<EntityURI, number>,
+): GraphStressResult {
+  const base = simulateGraph(graph);
+  let stressedGraph = graph;
+  for (const [uri, delta] of Object.entries(factorDeltas) as [EntityURI, number][]) {
+    if (Number.isFinite(delta) && delta !== 0) {
+      stressedGraph = perturbGraphFactor(stressedGraph, uri, delta);
+    }
+  }
+  const stressed = simulateGraph(stressedGraph);
+  return {
+    factorDeltas,
+    base,
+    stressed,
+    cashDelta: stressed.endCash - base.endCash,
+    profitDelta: stressed.totals.operatingProfit - base.totals.operatingProfit,
+  };
+}
+
+/** Ajaa Monte Carlo -simulaation mille tahansa EnterpriseGraph-graafin FactorNode-joukolle (Record<EntityURI, number>). */
+export function graphMonteCarlo(
+  graph: EnterpriseGraph,
+  factorRanges: Record<EntityURI, number>,
+  runs = 100,
+  seed = 1,
+): GraphMonteCarloResult {
+  const rnd = seededRandom(seed);
+  const tri = (r: number) => (rnd() + rnd() - 1) * Math.max(0, r);
+  const end: number[] = [];
+  const min: number[] = [];
+  const profit: number[] = [];
+  let cashOut = 0;
+  let loss = 0;
+  const n = Math.max(10, Math.min(1000, Math.round(runs)));
+  const entries = Object.entries(factorRanges) as [EntityURI, number][];
+
+  for (let i = 0; i < n; i += 1) {
+    let g = graph;
+    for (const [uri, range] of entries) {
+      if (range > 0) {
+        g = perturbGraphFactor(g, uri, tri(range));
+      }
+    }
+    const r = simulateGraph(g);
+    end.push(r.endCash);
+    min.push(r.minCash);
+    profit.push(r.totals.operatingProfit);
+    if (r.cashOutDay !== null) cashOut += 1;
+    if (r.totals.operatingProfit < 0) loss += 1;
+  }
+
+  return {
+    runs: n,
+    factorRanges,
     endCash: percentiles(end),
     minCash: percentiles(min),
     totalProfit: percentiles(profit),

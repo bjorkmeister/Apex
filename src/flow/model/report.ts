@@ -5,6 +5,8 @@
  * Raportti kertoo luvut, oletukset ja niiden alkuperän sekä rajoitukset.
  */
 import type { Molecule } from "../kernel/types.ts";
+import type { EnterpriseGraph, FactorRef } from "../graph/types.ts";
+import { migrateMoleculeToGraph } from "../graph/migrate.ts";
 import { ATOM_KIND_LABELS } from "../kernel/presets.ts";
 import { atomPriceTolerance, customerTermsImpact, stressTest } from "../kernel/sensitivity.ts";
 import { buildView, unit } from "./view.ts";
@@ -24,10 +26,12 @@ export interface ReportInput {
   molecule: Molecule;
   checklist: ChecklistState;
   scenarios: Scenario[];
+  graph?: EnterpriseGraph;
 }
 
-export function buildReport({ molecule: m, checklist, scenarios }: ReportInput): string {
+export function buildReport({ molecule: m, checklist, scenarios, graph }: ReportInput): string {
   const v = buildView(m);
+  const g = graph ?? migrateMoleculeToGraph(m);
   const cl = checklistView(m, v, checklist);
   const f = founderStats(m);
   const date = new Date().toLocaleDateString(getLocale() === "en" ? "en-GB" : "fi-FI");
@@ -134,6 +138,90 @@ export function buildReport({ molecule: m, checklist, scenarios }: ReportInput):
   out.push(t("{done} / {total} valmiina.", { done: cl.done, total: cl.total }));
   for (const i of cl.items) out.push(`- [${i.status === "done" ? "x" : " "}] ${t(i.def.title)}`);
   out.push("");
+
+  const resolveRef = (ref: FactorRef | undefined, fb = 0): number => {
+    if (!ref) return fb;
+    if ("const" in ref) return ref.const;
+    return g.factors[ref.factor]?.value ?? fb;
+  };
+  const allNodes = Object.values(g.nodes);
+  const allCaps = Object.values(g.capabilities);
+
+  // L1-prosessikartta (EnterpriseGraph)
+  out.push(`## ${t("L1-prosessikartta")}`);
+  out.push(row([t("Prosessi"), t("APQC-luokka"), t("Määrittelytila"), t("Kapasiteetti / tick"), t("Vastuuhenkilö / Rooli")]));
+  out.push(sep(5));
+  for (const n of allNodes) {
+    const ownerCap = n.owner ? g.capabilities[n.owner]?.name ?? n.owner : "–";
+    const defState = n.definition ?? "defined";
+    const isUndefined = defState === "named" || defState === "unknown" || n.ghost?.status === "pending";
+    const primaryMod = n.physics?.[0];
+    const capVal = resolveRef(primaryMod?.params.capacityPerTick, 0);
+    const capText = isUndefined
+      ? t("Ei laskettu, koska määrittelemätön")
+      : primaryMod
+        ? `${num(capVal, 1)} (${primaryMod.atom})`
+        : "–";
+    out.push(row([n.name, `${n.apqcCategory ?? n.band} (L${n.level})`, defState, capText, ownerCap]));
+  }
+  out.push("");
+
+  // IT-järjestelmäkartta
+  const itSystems = allCaps.filter((c): c is Extract<typeof c, { kind: "system" }> => c.kind === "system");
+  out.push(`## ${t("IT-järjestelmäkartta")}`);
+  if (itSystems.length === 0) {
+    out.push(`- ${t("Ei määriteltyjä IT-järjestelmiä.")}`);
+  } else {
+    out.push(row([t("Järjestelmä"), t("Automaatioaste"), t("Käytettävyys"), t("Kustannus / kk"), t("Kytketyt prosessit")]));
+    out.push(sep(5));
+    for (const sys of itSystems) {
+      const boundNodes = allNodes
+        .filter((n) => n.mechanisms.some((b) => b.capability === sys.uri))
+        .map((n) => n.name)
+        .join(", ") || "–";
+      out.push(
+        row([
+          sys.name,
+          sys.layer,
+          pct(resolveRef(sys.availability, 1), 1),
+          money(resolveRef(sys.fixedCostPerTick, 0) * 30),
+          boundNodes,
+        ]),
+      );
+    }
+  }
+  out.push("");
+
+  // Organisaatiokuorma ja vastuut
+  const roles = allCaps.filter((c): c is Extract<typeof c, { kind: "role" }> => c.kind === "role");
+  out.push(`## ${t("Organisaatiokuorma ja vastuut")}`);
+  if (roles.length === 0) {
+    out.push(`- ${t("Ei erillisiä organisaatiorooleja.")}`);
+  } else {
+    out.push(row([t("Rooli"), t("FTE"), t("Kapasiteetti / tick"), t("Kustannus / kk"), t("Vastuusolmut")]));
+    out.push(sep(5));
+    for (const r of roles) {
+      const owned = allNodes
+        .filter((n) => n.owner === r.uri || n.mechanisms.some((b) => b.capability === r.uri))
+        .map((n) => n.name)
+        .join(", ") || "–";
+      const fte = resolveRef(r.fte, 1);
+      const hrs = resolveRef(r.hoursPerFtePerTick, 8);
+      const costPerFte = resolveRef(r.costPerFtePerTick, 0);
+      out.push(row([r.name, num(fte, 1), num(fte * hrs, 1), money(fte * costPerFte * 30), owned]));
+    }
+  }
+  out.push("");
+
+  // Eksplisiittinen lista määrittelemättömistä (named / unknown / ghost) solmuista
+  const undefinedNodes = allNodes.filter((n) => n.definition === "named" || n.definition === "unknown" || n.ghost?.status === "pending");
+  if (undefinedNodes.length > 0) {
+    out.push(`## ${t("Määrittelemättömät prosessisolmut")}`);
+    for (const u of undefinedNodes) {
+      out.push(`- **${u.name}** (\`${u.uri}\`, \`${u.definition ?? "named"}\`): ${t("Ei laskettu, koska määrittelemätön")}`);
+    }
+    out.push("");
+  }
 
   out.push(`## ${t("Laskelman rajoitukset")}`);
   out.push(`- ${t("Summat ilman arvonlisäveroa. Tuloveroja, lainoja ja korkoja ei ole mallinnettu.")}`);

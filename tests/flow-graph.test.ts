@@ -45,6 +45,8 @@ import { withLocale } from "../src/flow/i18n/index.ts";
 import {
   analyzeGaps,
   applyCapabilityTemplate,
+  applyGraphCommand,
+  applyGraphCommands,
   applyOptimisticPatch,
   buildBalanceSheet,
   buildBusinessCapabilitiesFromTemplate,
@@ -58,22 +60,49 @@ import {
   compileGenesisSpec,
   createDefaultAccounts,
   createEmptyLedger,
+  createGraphHistory,
   deterministicHash,
   evaluatePhysicsModule,
+  executeWithHistory,
   getPendingOptimisticPatches,
+  hydrateOptimisticPatch,
   migrateMoleculeToGraph,
+  orchestrateAsyncHydration,
   postJournal,
+  redoGraphCommand,
   rollbackOptimisticPatch,
   runShadowPreviewWithDefaults,
   setRootScope,
   simulateGraph,
+  undoGraphCommand,
   validateGraph,
+  validateGraphCommand,
   verifyLedgerInvariants,
   type EnterpriseGraph,
   type EntityURI,
+  type GraphCommand,
   type UniversalEnterpriseNode,
   type UniversalGenesisSpec,
 } from "../src/flow/graph/index.ts";
+import { flowCommandToGraphCommands } from "../src/flow/model/commands.ts";
+import {
+  breakEvenTolerance,
+  graphMonteCarlo,
+  graphStressTest,
+} from "../src/flow/kernel/sensitivity.ts";
+import {
+  analyzeStatement,
+  compareGraphActualsToPlan,
+  mapStatementToGraphLedger,
+  parseStatementCsv,
+} from "../src/flow/model/importer.ts";
+import {
+  buildGraphWidgetScope,
+  buildScope,
+  evaluateGraphWidget,
+  validateWidget,
+} from "../src/flow/model/widgets.ts";
+import { buildReport } from "../src/flow/model/report.ts";
 import {
   createOptimisticDraftFromIntent,
   parseGraphIntent,
@@ -1565,9 +1594,9 @@ describe("Tarkistuspiste 4 (Checkpoint V4) — 4 X-Ray-linssiä, Subsystem Scopi
     // 3. Ehdoton eristyssääntö (Kanoninen yliajo 4 & Invariantti 6):
     // Ghost-solmujen vaikutus oikeaan simulaatioon, kassaan, liikevaihtoon ja pääkirjaan on TÄSMÄLLEEN 0,00 €
     const runWithGhosts = simulateGraph(secondDraft.graph);
-    assert.equal(runWithGhosts.finalCash, baseRun.finalCash);
-    assert.equal(runWithGhosts.totalNetRevenue, baseRun.totalNetRevenue);
-    assert.equal(runWithGhosts.totalOperatingProfit, baseRun.totalOperatingProfit);
+    assert.equal(runWithGhosts.endCash, baseRun.endCash);
+    assert.equal(runWithGhosts.totals.revenue, baseRun.totals.revenue);
+    assert.equal(runWithGhosts.totals.operatingProfit, baseRun.totals.operatingProfit);
     assert.equal(
       runWithGhosts.statements.balanceSheet.totalAssets,
       baseRun.statements.balanceSheet.totalAssets,
@@ -1606,5 +1635,456 @@ describe("Tarkistuspiste 4 (Checkpoint V4) — 4 X-Ray-linssiä, Subsystem Scopi
     assert.equal(rb1.rolledBackPatch?.status, "rolled_back");
     assert.equal(rb1.remainingPatches.length, 0);
     assert.deepEqual(rb1.graph, baseGraph);
+  });
+});
+
+describe("Tarkistuspiste 5 (Checkpoint V5) — GraphCommand-moottori, Kalibroitu mitoosi, Spotlight-idempotenssi, Async LLM-hydraatio & Graafipohjainen analyysi", () => {
+  it("21. Kaikki 16+ GraphCommand-operaatiota, Kalibroitu mitoosi (decompose_node 0,00 % hyppäys), Spotlight-idempotenssi, FlowCommand-adapteri ja Undo/Redo", () => {
+    const mol = createPreset("it_consultant");
+    const baseGraph = migrateMoleculeToGraph(mol);
+    const baseRun = simulateGraph(baseGraph);
+
+    const targetLeafUri = Object.values(baseGraph.nodes).find(
+      (n) => n.level === 1 && n.band === "value_stream" && n.children.length === 0,
+    )!.uri;
+
+    // 1. Kalibroitu mitoosi (decompose_node): purkaa lehtisolmun 5 alisolmuksi ilman hyppäystä simulaatiossa (0,00 %)
+    const decompCmd: GraphCommand = {
+      type: "decompose_node",
+      uri: targetLeafUri,
+      children: [],
+      calibrated: true,
+    };
+    assert.ok(validateGraphCommand(decompCmd, baseGraph));
+    const decompGraph = applyGraphCommand(baseGraph, decompCmd);
+    assert.equal(decompGraph.nodes[targetLeafUri]!.children.length, 5);
+
+    const decompRun = simulateGraph(decompGraph);
+    assert.equal(decompRun.invariantErrors.length, 0);
+    assert.ok(Math.abs(decompRun.endCash - baseRun.endCash) <= 1e-6, `Kassa hyppäsi: ${decompRun.endCash} vs ${baseRun.endCash}`);
+    assert.ok(Math.abs(decompRun.totals.revenue - baseRun.totals.revenue) <= 1e-6);
+    assert.ok(Math.abs(decompRun.totals.operatingProfit - baseRun.totals.operatingProfit) <= 1e-6);
+
+    // 2. Idempotenssisuoja: toistuva decompose_node samalle solmulle TAI sen alisolmulle EI luo sisäkkäisiä lapsia!
+    const nodeCountAfterFirst = Object.keys(decompGraph.nodes).length;
+    const decompAgain = applyGraphCommand(decompGraph, decompCmd);
+    assert.equal(Object.keys(decompAgain.nodes).length, nodeCountAfterFirst);
+
+    const firstSubstepUri = decompGraph.nodes[targetLeafUri]!.children[0]!;
+    const decompSubstep = applyGraphCommand(decompAgain, {
+      type: "decompose_node",
+      uri: firstSubstepUri,
+      children: [],
+    });
+    assert.equal(Object.keys(decompSubstep.nodes).length, nodeCountAfterFirst);
+    assert.equal(decompSubstep.nodes[firstSubstepUri]!.children.length, 0);
+
+    // Myös UI:n buildStudioGraphState-funktio (Spotlight) on täysin idempotentti ja kalibroitu
+    const stNoSpot = buildStudioGraphState(mol, 3, []);
+    const stSpot1 = buildStudioGraphState(mol, 3, [targetLeafUri]);
+    const stSpotDup = buildStudioGraphState(mol, 3, [
+      targetLeafUri,
+      targetLeafUri,
+      `${targetLeafUri}_d_intake` as EntityURI,
+    ]);
+    assert.equal(Object.keys(stSpot1.graph.nodes).length, Object.keys(stSpotDup.graph.nodes).length);
+    assert.ok(Math.abs(stSpot1.run.endCash - stNoSpot.run.endCash) <= 1e-6);
+    assert.ok(Math.abs(stSpot1.run.totals.operatingProfit - stNoSpot.run.totals.operatingProfit) <= 1e-6);
+
+    // 3. Testataan loput 15 GraphCommand-komentoa puhtaina funktioina
+    let g = structuredClone(decompGraph);
+
+    // add_node & remove_node
+    const customNode: UniversalEnterpriseNode = {
+      uri: "apex://node/custom_qa_lab",
+      name: "Laatulaboratorio",
+      apqcCategory: 4.0,
+      level: 1,
+      band: "value_stream",
+      tags: [],
+      parent: g.root,
+      children: [],
+      definition: "defined",
+      ports: [
+        { id: "in", name: "In", side: "I", unit: "apex://unit/hours", ratio: { const: 1 } },
+        { id: "out", name: "Out", side: "O", unit: "apex://unit/hours", ratio: { const: 1 } },
+      ],
+      physics: [
+        {
+          atom: "time_capacity",
+          params: {
+            capacityPerTick: { const: 20 },
+            cycleTicks: { const: 1 },
+            firstPassYield: { const: 1 },
+            variableCost: { const: 0 },
+            fixedCostPerTick: { const: 0 },
+          },
+        },
+      ],
+      mechanisms: [],
+      ledgerBindings: [],
+      kpis: [],
+    };
+    g = applyGraphCommand(g, { type: "add_node", node: customNode });
+    assert.ok(g.nodes["apex://node/custom_qa_lab"]);
+
+    // connect_stream & split_stream
+    g = applyGraphCommand(g, {
+      type: "connect_stream",
+      stream: {
+        uri: "apex://stream/custom_qa_stream",
+        name: "QA Stream",
+        parent: null,
+        children: [],
+        from: { node: targetLeafUri, port: "out_primary" },
+        to: { node: "apex://node/custom_qa_lab", port: "in" },
+        unit: "apex://unit/hours",
+        routing: { kind: "direct" },
+        latencyTicks: { const: 0 },
+        lossRate: { const: 0 },
+        transferCost: { const: 0 },
+      },
+    });
+    assert.ok(g.streams["apex://stream/custom_qa_stream"]);
+
+    g = applyGraphCommand(g, {
+      type: "split_stream",
+      uri: "apex://stream/custom_qa_stream",
+      children: [
+        {
+          uri: "apex://stream/custom_qa_stream_a",
+          name: "QA Stream A",
+          parent: "apex://stream/custom_qa_stream",
+          children: [],
+          from: { node: targetLeafUri, port: "out_primary" },
+          to: { node: "apex://node/custom_qa_lab", port: "in" },
+          unit: "apex://unit/hours",
+          routing: { kind: "split", share: { const: 0.5 } },
+          latencyTicks: { const: 0 },
+          lossRate: { const: 0 },
+          transferCost: { const: 0 },
+        },
+      ],
+    });
+    assert.ok(g.streams["apex://stream/custom_qa_stream_a"]);
+
+    // promote_node & replicate_subgraph
+    g = applyGraphCommand(g, {
+      type: "promote_node",
+      uri: firstSubstepUri,
+      newParent: g.root,
+    });
+    assert.equal(g.nodes[firstSubstepUri]!.parent, g.root);
+
+    g = applyGraphCommand(g, {
+      type: "replicate_subgraph",
+      uri: "apex://node/custom_qa_lab",
+      copies: 1,
+    });
+    assert.ok(g.nodes["apex://node/custom_qa_lab_rep_1"]);
+
+    g = applyGraphCommand(g, { type: "remove_node", uri: "apex://node/custom_qa_lab_rep_1" });
+    assert.equal(g.nodes["apex://node/custom_qa_lab_rep_1"], undefined);
+
+    // set_factor & set_formula (ja P5-suoja epäkelvolle kaavalle)
+    const anyFactorUri = Object.keys(g.factors)[0]! as EntityURI;
+    g = applyGraphCommand(g, {
+      type: "set_factor",
+      uri: anyFactorUri,
+      value: 42,
+      provenance: { source: "user" },
+    });
+    assert.equal(g.factors[anyFactorUri]!.value, 42);
+
+    g = applyGraphCommand(g, {
+      type: "set_formula",
+      uri: "apex://factor/custom_formula_test",
+      formula: "20 * 2 + 2",
+    });
+    assert.equal(g.factors["apex://factor/custom_formula_test"]!.kind, "formula");
+    assert.equal(
+      validateGraphCommand({ type: "set_formula", uri: anyFactorUri, formula: "alert(1); ;;" }, g),
+      null,
+    );
+
+    // add_capability, attach_capability, detach_capability, set_owner, bind_ledger, add_event, set_root_scope, set_maturity
+    g = applyGraphCommand(g, {
+      type: "add_capability",
+      capability: {
+        kind: "system",
+        uri: "apex://system/custom_automation",
+        name: "Automaatiojärjestelmä",
+        layer: "workflow",
+        fixedCostPerTick: { const: 5 },
+        capex: { const: 0 },
+        availability: { const: 0.99 },
+      },
+    });
+    g = applyGraphCommand(g, {
+      type: "attach_capability",
+      node: "apex://node/custom_qa_lab",
+      binding: { capability: "apex://system/custom_automation", critical: false },
+    });
+    assert.equal(g.nodes["apex://node/custom_qa_lab"]!.mechanisms.length, 1);
+
+    g = applyGraphCommand(g, {
+      type: "detach_capability",
+      node: "apex://node/custom_qa_lab",
+      capability: "apex://system/custom_automation",
+    });
+    assert.equal(g.nodes["apex://node/custom_qa_lab"]!.mechanisms.length, 0);
+
+    g = applyGraphCommand(g, {
+      type: "add_capability",
+      capability: {
+        kind: "role",
+        uri: "apex://role/qa_lead",
+        name: "Laatuvastaava",
+        orgUnit: "apex://unit-org/operations",
+        fte: { const: 1 },
+        costPerFtePerTick: { const: 120 },
+        hoursPerFtePerTick: { const: 7.5 },
+        proficiency: { const: 0.95 },
+      },
+    });
+    const anyRoleUri = "apex://role/qa_lead" as EntityURI;
+    g = applyGraphCommand(g, {
+      type: "set_owner",
+      node: "apex://node/custom_qa_lab",
+      owner: anyRoleUri,
+    });
+    assert.equal(g.nodes["apex://node/custom_qa_lab"]!.owner, anyRoleUri);
+
+    g = applyGraphCommand(g, {
+      type: "bind_ledger",
+      node: "apex://node/custom_qa_lab",
+      binding: {
+        event: "per_tick",
+        debit: "apex://account/opex_fixed",
+        credit: "apex://account/cash",
+        amount: { const: 10 },
+      },
+    });
+    assert.equal(g.nodes["apex://node/custom_qa_lab"]!.ledgerBindings.length, 1);
+
+    g = applyGraphCommand(g, {
+      type: "add_event",
+      event: { id: "ev_test", title: "Kysyntäpiikki", startTick: 30, durationTicks: 30, volumeChange: 0.2 },
+    });
+    assert.ok(g.events.some((e) => e.id === "ev_test"));
+
+    g = applyGraphCommand(g, { type: "set_root_scope", root: "apex://node/custom_qa_lab" });
+    assert.equal(g.scopeRoot, "apex://node/custom_qa_lab");
+
+    g = applyGraphCommand(g, { type: "set_maturity", maturity: 2 });
+    assert.equal(g.maturity, 2);
+
+    // 4. FlowCommand -> GraphCommand[] -adapteri ja Undo/Redo-pino (GraphHistoryStack)
+    const adaptedCmds = flowCommandToGraphCommands(
+      { type: "set_credit", field: "customerTermsDays", value: 45 },
+      baseGraph,
+      { source: "user" },
+    );
+    assert.equal(adaptedCmds.length, 1);
+
+    let history = createGraphHistory(baseGraph);
+    history = executeWithHistory(history, adaptedCmds, "Maksuaika 45 pv", { source: "user" });
+    assert.equal(history.current.factors["apex://factor/credit_customerTermsDays"]!.value, 45);
+    assert.equal(history.undoStack.length, 1);
+
+    history = undoGraphCommand(history);
+    assert.equal(
+      history.current.factors["apex://factor/credit_customerTermsDays"]!.value,
+      baseGraph.factors["apex://factor/credit_customerTermsDays"]!.value,
+    );
+    assert.equal(history.redoStack.length, 1);
+
+    history = redoGraphCommand(history);
+    assert.equal(history.current.factors["apex://factor/credit_customerTermsDays"]!.value, 45);
+  });
+
+  it("22. Invariantti A4 (Nopeus 3): Asynkroninen LLM-hydraatio, < 16 ms paikalliset säätimet odotuksen aikana, käyttäjän muokkaussuoja (provenance: 'user' voittaa) ja automaattinen rollback", async () => {
+    const mol = createPreset("it_consultant");
+    let liveGraph = migrateMoleculeToGraph(mol);
+
+    const draftRes = applyOptimisticPatch(liveGraph, "Lisää pilviyhteistyöalusta", {
+      name: "Pilviyhteistyöalusta",
+      atom: "recurring_subscription",
+    });
+    liveGraph = draftRes.graph;
+    const ghostUri = draftRes.patch.ghostNodes[0]!;
+    const targetFactorUri = "apex://factor/credit_customerTermsDays" as EntityURI;
+    const otherFactorUri = "apex://factor/credit_supplierTermsDays" as EntityURI;
+
+    // Käynnistä asynkroninen taustahydraatio (simuloi 5 s LLM-odotusta 40 ms viiveellä)
+    const hydrationPromise = orchestrateAsyncHydration({
+      getGraph: () => liveGraph,
+      setGraph: (next) => {
+        liveGraph = next;
+      },
+      patchId: draftRes.patch.patchId,
+      timeoutMs: 2000,
+      task: async () => {
+        await new Promise((r) => setTimeout(r, 40));
+        return {
+          patchId: draftRes.patch.patchId,
+          streamed: [
+            // LLM yrittää ylikirjoittaa sekä käyttäjän muokkaaman faktorin että toisen faktorin
+            { type: "set_factor", uri: targetFactorUri, value: 90 },
+            { type: "set_factor", uri: otherFactorUri, value: 21 },
+          ],
+        };
+      },
+    });
+
+    // Odotuksen aikana käyttäjä säätää paikallista vipua (< 16 ms vasteaika, ei blokkaannu!)
+    const t0 = performance.now();
+    liveGraph = applyGraphCommand(liveGraph, {
+      type: "set_factor",
+      uri: targetFactorUri,
+      value: 7,
+      provenance: { source: "user", note: "Käyttäjän lukitsema maksuaika" },
+    });
+    const localEditMs = performance.now() - t0;
+    assert.ok(localEditMs < 16, `Paikallinen set_factor kesti ${localEditMs.toFixed(2)} ms (>= 16 ms)`);
+
+    const hydrationRes = await hydrationPromise;
+    assert.equal(hydrationRes.status, "hydrated");
+    // Käyttäjän odotuksen aikana muokkaama arvo (7 pv, source: "user") säilyi eikä ylikirjoittunut LLM:n arvolla (90 pv)!
+    assert.ok(hydrationRes.preservedUserFactors.includes(targetFactorUri));
+    assert.equal(liveGraph.factors[targetFactorUri]!.value, 7);
+    assert.equal(liveGraph.factors[targetFactorUri]!.provenance?.source, "user");
+    // Toinen faktori, johon käyttäjä ei koskenut, päivittyi LLM-hydraatiosta
+    assert.equal(liveGraph.factors[otherFactorUri]!.value, 21);
+    // Ghost-solmu siirtyi tilaan defined & hydrated
+    assert.equal(liveGraph.nodes[ghostUri]!.definition, "defined");
+    assert.equal(liveGraph.nodes[ghostUri]!.ghost?.status, "hydrated");
+
+    // Testaa automaattinen rollback, kun asynkroninen LLM-hydraatio epäonnistuu tai palauttaa epäkelvon komennon
+    const beforeFailSnap = structuredClone(liveGraph);
+    const failDraft = applyOptimisticPatch(liveGraph, "Virheellinen luonnos", {
+      name: "Virheellinen luonnos",
+    });
+    liveGraph = failDraft.graph;
+    const failGhostUri = failDraft.patch.ghostNodes[0]!;
+    assert.ok(liveGraph.nodes[failGhostUri]);
+
+    const failRes = await orchestrateAsyncHydration({
+      getGraph: () => liveGraph,
+      setGraph: (next) => {
+        liveGraph = next;
+      },
+      patchId: failDraft.patch.patchId,
+      timeoutMs: 500,
+      task: async () => {
+        throw new Error("Simulated LLM network error");
+      },
+    });
+    assert.equal(failRes.status, "rolled_back");
+    assert.equal(liveGraph.nodes[failGhostUri], undefined);
+    assert.deepEqual(liveGraph, beforeFailSnap);
+  });
+
+  it("23. Graafipohjainen analyysi (sensitivity.ts), tiliotteen pääkirjakohdistus & toteuma (importer.ts), EntityURI-widgetit (widgets.ts) ja graafiraportti (report.ts)", () => {
+    const mol = createPreset("webshop");
+    const graph = migrateMoleculeToGraph(mol);
+
+    // 1. Herkkyys-, kipuraja-, stressitesti- ja Monte Carlo -analyysi mille tahansa FactorNode-faktorille (EntityURI)
+    const priceFactorUri = Object.keys(graph.factors).find((u) => u.endsWith("_unitPrice")) as EntityURI;
+    assert.ok(priceFactorUri);
+
+    const tol = breakEvenTolerance(graph, priceFactorUri, 0.1);
+    assert.equal(tol.factorUri, priceFactorUri);
+    assert.ok(tol.profitDelta > 0);
+    assert.ok(tol.maxVolumeLoss !== null && tol.maxVolumeLoss > 0);
+
+    const stress = graphStressTest(graph, { [priceFactorUri]: -0.15 });
+    assert.ok(stress.profitDelta < 0);
+    assert.ok(stress.cashDelta < 0);
+
+    const mc = graphMonteCarlo(graph, { [priceFactorUri]: 0.2 }, 25, 7);
+    assert.equal(mc.runs, 25);
+    assert.ok(mc.endCash.p10 <= mc.endCash.p50 && mc.endCash.p50 <= mc.endCash.p90);
+
+    // 2. Tiliotteen tuonti ja kohdistus EnterpriseGraph-pääkirjaan ja solmuihin + toteumavertailu
+    const csv = [
+      "Kirjauspäivä;Määrä;Saaja/Maksaja;Viesti;Saldo",
+      "05.01.2026;14500,00;Asiakas Oy;Lasku 101;24500,00",
+      "10.01.2026;-1200,00;Toimitilavuokra Oy;Tammikuun vuokra;23300,00",
+      "15.01.2026;-350,00;Ilmarinen;YEL-vakuutus;22950,00",
+      "05.02.2026;15200,00;Asiakas B Oy;Lasku 102;38150,00",
+      "10.02.2026;-1200,00;Toimitilavuokra Oy;Helmikuun vuokra;36950,00",
+      "15.02.2026;-350,00;Ilmarinen;YEL-vakuutus;36600,00",
+    ].join("\n");
+    const parsed = parseStatementCsv(csv);
+    assert.equal(parsed.error, null);
+    const analysis = analyzeStatement(parsed.transactions);
+    const mapping = mapStatementToGraphLedger(graph, analysis);
+    assert.ok(mapping.lines.length >= 2);
+    assert.ok(mapping.lines.some((l) => l.debitAccountUri === "apex://account/payroll_expense"));
+    assert.ok(mapping.lines.some((l) => l.debitAccountUri === "apex://account/opex_fixed"));
+    assert.equal(mapping.incomeMapping.creditAccountUri, "apex://account/revenue");
+    assert.ok(mapping.commands.length >= 2);
+
+    const comparison = compareGraphActualsToPlan(graph, analysis.monthly);
+    assert.equal(comparison.months.length, 2);
+    assert.equal(comparison.accountVariances.length, 3);
+    assert.ok(comparison.nodeVariances.length >= 1);
+
+    // 3. Widgettien kaavat tukevat suoraan EnterpriseGraph EntityURI -viittauksia ja faktorialiaksia
+    const view = buildView(mol);
+    const scope = buildScope(mol, view, graph);
+    assert.equal(scope[priceFactorUri], graph.factors[priceFactorUri]!.value);
+
+    const validatedWidget = validateWidget(
+      {
+        kind: "metric",
+        title: "Yksikköhinta suoraan EntityURI-faktorista",
+        formula: `${priceFactorUri} * 2`,
+        format: "eur",
+      },
+      mol,
+      view,
+      "user",
+    );
+    assert.equal(validatedWidget.error, null);
+    assert.ok(validatedWidget.spec);
+    const evalRes = evaluateGraphWidget(validatedWidget.spec, graph);
+    assert.equal(evalRes.kind, "metric");
+    if (evalRes.kind === "metric") {
+      assert.equal(evalRes.value, graph.factors[priceFactorUri]!.value * 2);
+    }
+
+    // 4. Raportti (buildReport) sisältää L1-prosessikartan, IT-järjestelmäkartan, organisaatiokuorman ja määrittelemättömät solmut
+    const graphWithUndefined = applyGraphCommand(graph, {
+      type: "add_node",
+      node: {
+        uri: "apex://node/future_warehouse",
+        name: "Uusi keskusvarasto",
+        apqcCategory: 4.0,
+        level: 1,
+        band: "value_stream",
+        tags: [],
+        parent: graph.root,
+        children: [],
+        definition: "named",
+        ports: [],
+        mechanisms: [],
+        ledgerBindings: [],
+        kpis: [],
+      },
+    });
+    const reportMd = buildReport({
+      molecule: mol,
+      checklist: { items: {} },
+      scenarios: [],
+      graph: graphWithUndefined,
+    });
+    assert.ok(reportMd.includes("## L1-prosessikartta"));
+    assert.ok(reportMd.includes("## IT-järjestelmäkartta"));
+    assert.ok(reportMd.includes("## Organisaatiokuorma ja vastuut"));
+    assert.ok(reportMd.includes("## Määrittelemättömät prosessisolmut"));
+    assert.ok(reportMd.includes("Uusi keskusvarasto"));
+    assert.ok(reportMd.includes("Ei laskettu, koska määrittelemätön"));
   });
 });

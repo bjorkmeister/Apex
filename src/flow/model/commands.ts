@@ -7,7 +7,13 @@
  * joten kielimallin vastaus ei voi rikkoa mallia tai kirjoittaa sallittujen
  * kenttien ulkopuolelle. Muutettujen lukujen alkuperä tallennetaan.
  */
-import type { AtomKind, FixedCostCategory, Molecule, ProvenanceSource } from "../kernel/types.ts";
+import type { AtomKind, FixedCostCategory, Molecule, Provenance, ProvenanceSource } from "../kernel/types.ts";
+import type {
+  EnterpriseGraph,
+  EntityURI,
+  GraphCommand,
+  UniversalEnterpriseNode,
+} from "../graph/types.ts";
 import { ATOM_KIND_LABELS, newId } from "../kernel/presets.ts";
 import type { StressInput } from "../kernel/sensitivity.ts";
 import { addAtom, addFixedCost, isEditableField, removeAtom, removeFixedCost, renameMolecule, setAtomField } from "./edit.ts";
@@ -382,4 +388,107 @@ export function applyCommands(m: Molecule, cl: ChecklistState, raw: unknown[], o
     applied.push(description);
   }
   return { molecule, checklist, openPanel, stress, applied, rejected, structural };
+}
+
+/**
+ * Muuntaa vanhan `FlowCommand`-komennon vastaaviksi `GraphCommand`-operaatioiksi
+ * `EnterpriseGraph`-metagraafin päällä (TSD 4.3 & 8).
+ */
+export function flowCommandToGraphCommands(
+  cmd: FlowCommand,
+  graph: EnterpriseGraph,
+  provenance: Provenance = { source: "coach" },
+): GraphCommand[] {
+  const sanitize = (s: string) => s.replace(/[^A-Za-z0-9_-]/g, "_");
+  switch (cmd.type) {
+    case "set_atom_field": {
+      const fUri = `apex://factor/${sanitize(cmd.atomId)}_${sanitize(cmd.field)}` as EntityURI;
+      return [{ type: "set_factor", uri: fUri, value: cmd.value ?? -1, provenance }];
+    }
+    case "scale_atom_field": {
+      const fUri = `apex://factor/${sanitize(cmd.atomId)}_${sanitize(cmd.field)}` as EntityURI;
+      const cur = graph.factors[fUri]?.value ?? 100;
+      const next = cmd.field === "people" ? Math.max(1, Math.round(cur * cmd.factor)) : cur * cmd.factor;
+      return [{ type: "set_factor", uri: fUri, value: next, provenance }];
+    }
+    case "set_credit": {
+      if (cmd.field === "openingCash") {
+        const fUri = "apex://factor/credit_openingCash" as EntityURI;
+        return [{ type: "set_factor", uri: fUri, value: cmd.value, provenance }];
+      }
+      const fUri = `apex://factor/credit_${cmd.field}` as EntityURI;
+      return [{ type: "set_factor", uri: fUri, value: cmd.value, provenance }];
+    }
+    case "add_atom": {
+      const id = newId("atom");
+      const nodeUri = `apex://node/${id}` as EntityURI;
+      const atomMap: Record<AtomKind, "time_capacity" | "physical_matter" | "recurring_subscription" | "transactional_trade"> = {
+        TIME_CAPACITY: "time_capacity",
+        PHYSICAL_MATTER: "physical_matter",
+        RECURRING_SUB: "recurring_subscription",
+        TRANSACTIONAL_TRADE: "transactional_trade",
+      };
+      const newNode: UniversalEnterpriseNode = {
+        uri: nodeUri,
+        name: cmd.label ?? t(ATOM_KIND_LABELS[cmd.kind].title),
+        apqcCategory: 3.0,
+        level: 1,
+        band: "value_stream",
+        tags: [`atom:${cmd.kind}`],
+        parent: graph.root,
+        children: [],
+        definition: "defined",
+        ports: [
+          { id: "in", name: "Input", side: "I", unit: "apex://unit/items", ratio: { const: 1 } },
+          { id: "out", name: "Output", side: "O", unit: "apex://unit/items", ratio: { const: 1 }, role: "primary" },
+        ],
+        physics: [
+          {
+            atom: atomMap[cmd.kind],
+            params: {
+              capacityPerTick: { const: 20 },
+              cycleTicks: { const: 1 },
+              firstPassYield: { const: 1 },
+              unitPrice: { const: cmd.params?.hourlyRate ?? cmd.params?.unitPrice ?? cmd.params?.pricePerMonth ?? cmd.params?.averageTicket ?? 100 },
+              variableCost: { const: 25 },
+              fixedCostPerTick: { const: 10 },
+            },
+          },
+        ],
+        mechanisms: [],
+        ledgerBindings: [],
+        kpis: [],
+      };
+      return [{ type: "add_node", node: newNode }];
+    }
+    case "remove_atom": {
+      const nUri = `apex://node/${sanitize(cmd.atomId)}` as EntityURI;
+      return graph.nodes[nUri] ? [{ type: "remove_node", uri: nUri }] : [];
+    }
+    case "add_fixed_cost": {
+      const id = newId("fc");
+      const fUri = `apex://factor/fc_${id}_amountPerMonth` as EntityURI;
+      return [{ type: "set_factor", uri: fUri, value: cmd.amountPerMonth, provenance }];
+    }
+    case "add_event": {
+      return [
+        {
+          type: "add_event",
+          event: {
+            id: newId("ev"),
+            title: cmd.event.title,
+            startTick: cmd.event.startMonth * 30,
+            durationTicks: cmd.event.durationMonths * 30,
+            volumeChange: cmd.event.volumeChange,
+            priceChange: cmd.event.priceChange,
+            variableCostChange: cmd.event.variableCostChange,
+            fixedCostChange: cmd.event.fixedCostChange,
+            oneOffCost: cmd.event.oneOffCost,
+          },
+        },
+      ];
+    }
+    default:
+      return [];
+  }
 }

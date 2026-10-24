@@ -447,10 +447,20 @@ export function buildStudioGraphState(
 
 /**
  * Pilkkoo valitun L1-solmun L2-alivaiheiksi Spotlight- ja Stream Bundling -tarkastelua varten.
+ * Kalibroitu mitoosi & idempotenssisuoja:
+ * - Ei koskaan pilko jo pilkottua solmua (`children.length > 0`) eikä pilkotun solmun alisolmua (`substep:`).
+ * - Säilyttää koostesolmun kokonaiskapasiteetin, liikevaihdon, kulut ja kassavirran täsmälleen ennallaan.
  */
 export function decomposeNodeIntoSubsteps(graph: EnterpriseGraph, parentUri: EntityURI): void {
   const parent = graph.nodes[parentUri];
-  if (!parent || parent.children.length > 0) return;
+  if (
+    !parent ||
+    parent.children.length > 0 ||
+    parent.level >= 2 ||
+    parent.tags.some((tg) => tg.startsWith("substep:"))
+  ) {
+    return;
+  }
 
   const basePhysics = parent.physics ?? [];
   const stepSpecs = [
@@ -469,10 +479,11 @@ export function decomposeNodeIntoSubsteps(graph: EnterpriseGraph, parentUri: Ent
     const childUri = `${parentUri}_${spec.suffix}` as EntityURI;
     childUris.push(childUri);
 
-    const isLast = i === stepSpecs.length - 1;
+    const isFirst = i === 0;
     const childNode: UniversalEnterpriseNode = {
       uri: childUri,
       name: `${parent.name} · ${spec.name}`,
+      apqcCategory: parent.apqcCategory,
       level: parent.level + 1,
       band: parent.band,
       definition: parent.definition ?? "defined",
@@ -496,23 +507,23 @@ export function decomposeNodeIntoSubsteps(graph: EnterpriseGraph, parentUri: Ent
           role: "primary",
         },
       ],
-      physics: isLast
+      physics: isFirst
         ? basePhysics
         : [
             {
               atom: "time_capacity",
               params: {
-                capacityPerTick: { const: 500 },
-                cycleTicks: { const: 1 },
-                firstPassYield: { const: 0.99 },
+                capacityPerTick: { const: 1_000_000 },
+                cycleTicks: { const: 0 },
+                firstPassYield: { const: 1 },
                 variableCost: { const: 0 },
                 fixedCostPerTick: { const: 0 },
               },
             },
           ],
-      mechanisms: parent.mechanisms.map((m) => ({ ...m })),
+      mechanisms: isFirst ? parent.mechanisms.map((m) => ({ ...m })) : [],
       owner: parent.owner,
-      ledgerBindings: [],
+      ledgerBindings: isFirst ? parent.ledgerBindings.map((lb) => ({ ...lb })) : [],
       kpis: [],
     };
     graph.nodes[childUri] = childNode;
@@ -529,15 +540,15 @@ export function decomposeNodeIntoSubsteps(graph: EnterpriseGraph, parentUri: Ent
         to: { node: childUri, port: "in" },
         unit: primaryUnit,
         routing: { kind: "direct" },
+        status: "active",
         latencyTicks: { const: 0 },
         lossRate: { const: 0 },
-        transferCost: { const: 0 },
+        transferCostPerUnit: { const: 0 },
       };
     }
   }
 
   parent.children = childUris;
-  delete parent.physics;
 }
 
 /**

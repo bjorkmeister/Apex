@@ -10,6 +10,8 @@
  * Ilman kielimallia käytetään sääntöpohjaisia vaihtoehtoja.
  */
 import type { Molecule } from "../kernel/types.ts";
+import type { AsyncLLMHydration, EnterpriseGraph, GraphCommand } from "../graph/types.ts";
+import { validateGraphCommand } from "../graph/commands.ts";
 import { emptyMolecule } from "../kernel/presets.ts";
 import { buildView } from "../model/view.ts";
 import { applyCommands, validateCommand, type FlowCommand } from "../model/commands.ts";
@@ -325,4 +327,77 @@ Palauta pelkkä JSON: {"summary":"2–3 virkettä","suggestions":[{"atomId":"...
     })
     .filter((x): x is MarketSuggestion => x !== null);
   return { signals, suggestions, summary: typeof d.summary === "string" ? d.summary.slice(0, 600) : "", source: "llm" };
+}
+
+// ---------------------------------------------------------------------------
+// Nopeus 3: Asynkroninen Ghost-solmun ja luonnoksen LLM-hydraatio (Invariantti A4)
+// ---------------------------------------------------------------------------
+
+export function isEnterpriseGraph(x: unknown): x is EnterpriseGraph {
+  const g = x as EnterpriseGraph;
+  return !!g && typeof g === "object" && typeof g.nodes === "object" && typeof g.streams === "object" && typeof g.factors === "object";
+}
+
+export async function handleGraphHydration(
+  body: unknown,
+): Promise<AsyncLLMHydration & { failed?: boolean; error?: string; rationale?: string }> {
+  const locale = localeOf(body);
+  const b = body as { patchId?: unknown; request?: unknown; graph?: unknown };
+  const patchId = typeof b?.patchId === "string" && b.patchId.trim() ? b.patchId.trim() : "opt-unknown";
+  const request = typeof b?.request === "string" ? b.request.trim().slice(0, 1000) : "";
+
+  if (!isEnterpriseGraph(b?.graph)) {
+    return {
+      patchId,
+      streamed: [],
+      failed: true,
+      error: withLocale(locale, () => t("Graafimalli puuttuu hydraatiopyynnöstä.")),
+    };
+  }
+  const graph = b.graph;
+  const ghostNode = Object.values(graph.nodes).find((n) => n.ghost?.patchId === patchId);
+  const draftNodeUri = ghostNode?.uri;
+
+  const fallbackHydration = (note?: string) => ({
+    patchId,
+    streamed: [] as GraphCommand[],
+    rationale:
+      note ??
+      withLocale(locale, () => t("Sääntöpohjainen hydraatio vahvisti optimistisen luonnossolmun määritellyksi prosessisolmuksi.")),
+  });
+
+  if (!isLlmConfigured()) {
+    return fallbackHydration();
+  }
+
+  const res = await callLlmJson<{ commands?: unknown; rationale?: unknown }>({
+    systemInstruction: `Olet APEX Studio -yritysgraafin arkkitehti. Vahvista optimistinen Ghost-luonnossolmu (${draftNodeUri ?? patchId}) määritellyksi prosessisolmuksi.
+Palauta vain kelvollisia GraphCommand-komentoja JSON-muodossa:
+- {"type":"set_factor","uri":"apex://factor/...","value":luku}
+- {"type":"attach_capability","node":"apex://node/...","binding":{"capability":"apex://system/...","critical":false}}
+Kirjoita perustelu ${LANG_NAME[locale]}.
+Palauta pelkkä JSON: {"commands":[...],"rationale":"..."}`,
+    userPrompt: `Pyyntö: ${request}\nSolmu: ${draftNodeUri ?? patchId}\nFaktorit: ${JSON.stringify(
+      Object.values(graph.factors).map((f) => ({ uri: f.uri, name: f.name, value: f.value })),
+    )}`,
+    temperature: 0.2,
+    timeoutMs: 20000,
+    taskLabelFi: "APEX Studio: Ghost-solmun hydraatio",
+  });
+
+  if (!res.data || !Array.isArray(res.data.commands)) {
+    return fallbackHydration(
+      withLocale(locale, () => t("Kielimalli ei vastannut ({error}), vahvistin luonnoksen sääntöpohjaisesti.", { error: res.meta.error ?? "?" })),
+    );
+  }
+
+  const validCommands = res.data.commands
+    .map((c) => validateGraphCommand(c, graph))
+    .filter((c): c is GraphCommand => c !== null);
+
+  return {
+    patchId,
+    streamed: validCommands,
+    rationale: typeof res.data.rationale === "string" ? res.data.rationale.slice(0, 400) : undefined,
+  };
 }

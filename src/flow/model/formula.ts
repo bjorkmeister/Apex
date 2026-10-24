@@ -53,6 +53,12 @@ function tokenize(src: string): Tok[] {
       continue;
     }
     if (/[A-Za-z_]/.test(c)) {
+      const uriMatch = /^apex:\/\/[A-Za-z0-9_./-]+/.exec(src.slice(i));
+      if (uriMatch) {
+        out.push({ t: "id", v: uriMatch[0] });
+        i += uriMatch[0].length;
+        continue;
+      }
       const m = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*/.exec(src.slice(i))!;
       const w = m[0];
       if (w === "and") out.push({ t: "op", v: "&&" });

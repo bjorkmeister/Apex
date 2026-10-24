@@ -556,7 +556,12 @@ function renderLevers(): void {
 }
 
 function widgetContext() {
-  return { molecule: state.molecule!, view: state.view!, scope: buildScope(state.molecule!, state.view!) };
+  return {
+    molecule: state.molecule!,
+    view: state.view!,
+    scope: buildScope(state.molecule!, state.view!, state.graphState?.graph),
+    graph: state.graphState?.graph,
+  };
 }
 
 function renderWidgetsNow(): void {
@@ -649,7 +654,12 @@ function panelHtml(panel: PanelId): string {
     case "seasons":
       return renderSeasons(m, v);
     case "report":
-      state.report = buildReport({ molecule: m, checklist: state.checklist, scenarios: state.scenarios });
+      state.report = buildReport({
+        molecule: m,
+        checklist: state.checklist,
+        scenarios: state.scenarios,
+        graph: state.graphState?.graph,
+      });
       return renderReport(state.report);
     case "actuals":
       return renderActuals(v, state.actuals);
@@ -1211,13 +1221,18 @@ root.addEventListener("click", (ev) => {
     case "spotlight-node": {
       const uri = target.dataset.uri as EntityURI | undefined;
       if (uri) {
-        if (state.spotlightParentUri === uri) {
+        const nodeObj = state.graphState?.graph.nodes[uri];
+        // Jos käyttäjä klikkaa Spotlight-painiketta jo avatun alisolmun sisällä tai samassa emosolmussa,
+        // toimitaan puhtaana toggle-kytkimenä (poistutaan Spotlightista) luomatta koskaan uusia sisäkkäisiä alisolmuja!
+        const effectiveParentUri =
+          nodeObj && nodeObj.level >= 2 && nodeObj.parent ? nodeObj.parent : uri;
+        if (state.spotlightParentUri === effectiveParentUri) {
           state.spotlightParentUri = null;
           state.zoomPct = 45;
         } else {
-          state.decomposedUris.add(uri);
-          state.spotlightParentUri = uri;
-          state.selectedUri = uri;
+          state.decomposedUris.add(effectiveParentUri);
+          state.spotlightParentUri = effectiveParentUri;
+          state.selectedUri = effectiveParentUri;
           state.zoomPct = 80;
         }
         refresh();

@@ -7,7 +7,10 @@
  * Tuonti ei muuta mallia itsestään – se tuottaa ehdotukset, jotka käyttäjä hyväksyy.
  */
 import type { FixedCost, FixedCostCategory, Molecule } from "../kernel/types.ts";
+import type { EnterpriseGraph, EntityURI, GraphCommand } from "../graph/types.ts";
+import { simulateGraph, type SimulationRun } from "../graph/simulate.ts";
 import type { FlowCommand } from "./commands.ts";
+import { flowCommandToGraphCommands } from "./commands.ts";
 import { t } from "../i18n/index.ts";
 
 export interface Transaction {
@@ -345,4 +348,269 @@ export function importCommands(m: Molecule, a: StatementAnalysis, sel: ImportSel
     cmds.push({ type: "set_credit", field: "openingCash", value: Math.round(a.lastBalance) });
   }
   return cmds;
+}
+
+// ---------------------------------------------------------------------------
+// EnterpriseGraph-tason tiliotekohdistus ja toteuma vs. suunnitelma (TSD 7.3 & 9.1)
+// ---------------------------------------------------------------------------
+
+export interface GraphLedgerLineMapping {
+  key: string;
+  label: string;
+  monthlyAmount: number;
+  category: FixedCostCategory;
+  debitAccountUri: EntityURI;
+  creditAccountUri: EntityURI;
+  nodeUri: EntityURI | null;
+}
+
+export interface GraphStatementMapping {
+  lines: GraphLedgerLineMapping[];
+  incomeMapping: {
+    avgMonthlyIncome: number;
+    debitAccountUri: EntityURI;
+    creditAccountUri: EntityURI;
+    nodeUri: EntityURI | null;
+  };
+  commands: GraphCommand[];
+}
+
+export interface GraphAccountVariance {
+  accountUri: EntityURI;
+  accountLabel: string;
+  plannedMonthly: number;
+  actualMonthly: number;
+  variance: number;
+  varianceRatio: number | null;
+}
+
+export interface GraphNodeVariance {
+  nodeUri: EntityURI;
+  nodeLabel: string;
+  plannedMonthlyRevenue: number;
+  actualAllocatedRevenue: number;
+  revenueVariance: number;
+  plannedMonthlyCost: number;
+  actualAllocatedCost: number;
+  costVariance: number;
+}
+
+export interface GraphMonthlyActualComparison {
+  month: string;
+  actualIncome: number;
+  plannedRevenue: number;
+  revenueVariance: number;
+  actualExpenses: number;
+  plannedExpenses: number;
+  expenseVariance: number;
+  actualEndBalance: number | null;
+  plannedEndCash: number;
+}
+
+export interface GraphActualsComparison {
+  months: GraphMonthlyActualComparison[];
+  accountVariances: GraphAccountVariance[];
+  nodeVariances: GraphNodeVariance[];
+}
+
+/** Kohdistaa tiliotteen toistuvat kulut ja myynnin EnterpriseGraph-pääkirjatilille (LedgerAccount) ja solmuihin. */
+export function mapStatementToGraphLedger(
+  graph: EnterpriseGraph,
+  analysis: StatementAnalysis,
+  sel?: ImportSelection,
+): GraphStatementMapping {
+  const allNodes = Object.values(graph.nodes);
+  const leafNodes = allNodes.filter((n) => n.children.length === 0 && (n.definition ?? "defined") === "defined");
+  const primaryRevenueNode =
+    leafNodes.find((n) => n.band === "value_stream") ??
+    leafNodes[0] ??
+    allNodes[0] ??
+    null;
+  const governanceNode =
+    allNodes.find((n) => n.band === "enabling" || n.band === "governance") ??
+    primaryRevenueNode;
+
+  const selectedKeys = sel ? new Set(sel.costKeys) : new Set(analysis.recurring.map((r) => r.key));
+  const lines: GraphLedgerLineMapping[] = [];
+  const commands: GraphCommand[] = [];
+
+  for (const r of analysis.recurring) {
+    if (!selectedKeys.has(r.key)) continue;
+    const debitAccountUri: EntityURI =
+      r.category === "pension" ? "apex://account/payroll_expense" : "apex://account/opex_fixed";
+    const creditAccountUri: EntityURI = "apex://account/cash";
+    const matchedNode =
+      allNodes.find((n) => n.name.toLowerCase().includes(r.key.split(" ")[0] ?? "")) ??
+      (r.category === "marketing"
+        ? allNodes.find((n) => n.band === "value_stream") ?? governanceNode
+        : governanceNode);
+    const nodeUri = matchedNode?.uri ?? null;
+    lines.push({
+      key: r.key,
+      label: r.label,
+      monthlyAmount: r.monthlyAmount,
+      category: r.category,
+      debitAccountUri,
+      creditAccountUri,
+      nodeUri,
+    });
+    if (nodeUri) {
+      commands.push({
+        type: "bind_ledger",
+        node: nodeUri,
+        binding: {
+          event: "per_tick",
+          debit: debitAccountUri,
+          credit: creditAccountUri,
+          amount: { const: Math.round((r.monthlyAmount / 30) * 100) / 100 },
+        },
+      });
+    }
+    commands.push(
+      ...flowCommandToGraphCommands(
+        {
+          type: "add_fixed_cost",
+          label: r.label,
+          amountPerMonth: Math.round(r.monthlyAmount * 100) / 100,
+          dayOfMonth: r.dayOfMonth,
+          category: r.category,
+        },
+        graph,
+        { source: "import", note: r.label },
+      ),
+    );
+  }
+
+  if ((sel?.useBalance ?? true) && analysis.lastBalance !== null && analysis.lastBalance >= 0) {
+    commands.push(
+      ...flowCommandToGraphCommands(
+        { type: "set_credit", field: "openingCash", value: Math.round(analysis.lastBalance) },
+        graph,
+        { source: "import", note: "Tiliotteen loppusaldo" },
+      ),
+    );
+  }
+
+  return {
+    lines,
+    incomeMapping: {
+      avgMonthlyIncome: analysis.avgMonthlyIncome,
+      debitAccountUri: "apex://account/cash",
+      creditAccountUri: "apex://account/revenue",
+      nodeUri: primaryRevenueNode?.uri ?? null,
+    },
+    commands,
+  };
+}
+
+/** Vertaa tiliotteen kuukausitoteumia EnterpriseGraph-simulaation suunnitelmaan kuukausi-, tili- ja solmutasolla. */
+export function compareGraphActualsToPlan(
+  graph: EnterpriseGraph,
+  actuals: MonthlyActual[],
+  existingRun?: SimulationRun,
+): GraphActualsComparison {
+  const run = existingRun ?? simulateGraph(graph);
+  const simMonths = run.months ?? [];
+  const span = Math.max(1, actuals.length);
+
+  const months: GraphMonthlyActualComparison[] = actuals.map((act, idx) => {
+    const plannedMo = simMonths[idx % Math.max(1, simMonths.length)];
+    const plannedRevenue = plannedMo ? plannedMo.revenue : run.totals.revenue / 12;
+    const plannedExpenses = plannedMo
+      ? plannedMo.variableCosts + plannedMo.fixedCosts
+      : (run.totals.variableCosts + run.totals.fixedCosts) / 12;
+    const plannedEndCash = plannedMo ? plannedMo.endCash : run.endCash;
+    return {
+      month: act.month,
+      actualIncome: act.income,
+      plannedRevenue,
+      revenueVariance: act.income - plannedRevenue,
+      actualExpenses: act.expenses,
+      plannedExpenses,
+      expenseVariance: act.expenses - plannedExpenses,
+      actualEndBalance: act.endBalance,
+      plannedEndCash,
+    };
+  });
+
+  const avgActualIncome = actuals.reduce((s, a) => s + a.income, 0) / span;
+  const avgActualExpenses = actuals.reduce((s, a) => s + a.expenses, 0) / span;
+  const lastActualBalance =
+    [...actuals].reverse().find((a) => a.endBalance !== null)?.endBalance ?? run.endCash;
+
+  const plannedMonthlyRevenue = run.totals.revenue / 12;
+  const plannedMonthlyExpenses = (run.totals.variableCosts + run.totals.fixedCosts) / 12;
+  const plannedEndCash = months[months.length - 1]?.plannedEndCash ?? run.endCash;
+
+  const accountLabelOf = (uri: EntityURI, fallback: string) =>
+    graph.accounts[uri]?.name ?? graph.accounts[uri.replace(/^apex:\/\/account\//, "")]?.name ?? fallback;
+
+  const accountVariances: GraphAccountVariance[] = [
+    {
+      accountUri: "apex://account/revenue",
+      accountLabel: accountLabelOf("apex://account/revenue", "Myyntituotot"),
+      plannedMonthly: plannedMonthlyRevenue,
+      actualMonthly: avgActualIncome,
+      variance: avgActualIncome - plannedMonthlyRevenue,
+      varianceRatio: plannedMonthlyRevenue > 0 ? (avgActualIncome - plannedMonthlyRevenue) / plannedMonthlyRevenue : null,
+    },
+    {
+      accountUri: "apex://account/opex_fixed",
+      accountLabel: accountLabelOf("apex://account/opex_fixed", "Liiketoiminnan kulut"),
+      plannedMonthly: plannedMonthlyExpenses,
+      actualMonthly: avgActualExpenses,
+      variance: avgActualExpenses - plannedMonthlyExpenses,
+      varianceRatio: plannedMonthlyExpenses > 0 ? (avgActualExpenses - plannedMonthlyExpenses) / plannedMonthlyExpenses : null,
+    },
+    {
+      accountUri: "apex://account/cash",
+      accountLabel: accountLabelOf("apex://account/cash", "Rahavarat"),
+      plannedMonthly: plannedEndCash,
+      actualMonthly: lastActualBalance,
+      variance: lastActualBalance - plannedEndCash,
+      varianceRatio: plannedEndCash !== 0 ? (lastActualBalance - plannedEndCash) / Math.abs(plannedEndCash) : null,
+    },
+  ];
+
+  // Solmutason kohdistus simuloinnin nodeStates-tilan painotuksella
+  const definedLeaves = Object.values(graph.nodes).filter(
+    (n) => n.children.length === 0 && (n.definition ?? "defined") === "defined" && n.uri !== graph.root,
+  );
+  const nodePlanStats = definedLeaves.map((n) => {
+    const st = run.nodeStates[n.uri];
+    const revPerTick = st ? st.revenue : 0;
+    const costPerTick = st ? st.variableCost + st.fixedCost : 0;
+    return {
+      nodeUri: n.uri,
+      nodeLabel: n.name,
+      plannedMonthlyRevenue: revPerTick * 30,
+      plannedMonthlyCost: costPerTick * 30,
+    };
+  });
+
+  const totalNodePlannedRev = nodePlanStats.reduce((s, x) => s + x.plannedMonthlyRevenue, 0);
+  const totalNodePlannedCost = nodePlanStats.reduce((s, x) => s + x.plannedMonthlyCost, 0);
+
+  const nodeVariances: GraphNodeVariance[] = nodePlanStats.map((np) => {
+    const revShare = totalNodePlannedRev > 0 ? np.plannedMonthlyRevenue / totalNodePlannedRev : 1 / Math.max(1, nodePlanStats.length);
+    const costShare = totalNodePlannedCost > 0 ? np.plannedMonthlyCost / totalNodePlannedCost : 1 / Math.max(1, nodePlanStats.length);
+    const actualAllocatedRevenue = avgActualIncome * revShare;
+    const actualAllocatedCost = avgActualExpenses * costShare;
+    return {
+      nodeUri: np.nodeUri,
+      nodeLabel: np.nodeLabel,
+      plannedMonthlyRevenue: np.plannedMonthlyRevenue,
+      actualAllocatedRevenue,
+      revenueVariance: actualAllocatedRevenue - np.plannedMonthlyRevenue,
+      plannedMonthlyCost: np.plannedMonthlyCost,
+      actualAllocatedCost,
+      costVariance: actualAllocatedCost - np.plannedMonthlyCost,
+    };
+  });
+
+  return {
+    months,
+    accountVariances,
+    nodeVariances,
+  };
 }

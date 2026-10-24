@@ -15,6 +15,7 @@
  * - `setRootScope`: sets or clears `graph.scopeRoot` (`set_root_scope`) for Subsystem Scoping.
  */
 import type {
+  AsyncLLMHydration,
   AtomKind,
   EnterpriseGraph,
   EntityURI,
@@ -27,6 +28,7 @@ import type {
   UniversalEnterpriseNode,
 } from "./types.ts";
 import { deterministicHash } from "./compiler.ts";
+import { applyGraphCommand, validateGraphCommand } from "./commands.ts";
 import { simulateGraph, type SimulationRun } from "./simulate.ts";
 
 export interface OptimisticDraftSpec {
@@ -490,4 +492,223 @@ export function runShadowPreviewWithDefaults(graph: EnterpriseGraph): ShadowPrev
     isShadowPreview: true,
     ghostNodeUris,
   };
+}
+
+export interface OptimisticHydrationResult {
+  graph: EnterpriseGraph;
+  patch: OptimisticNodePatch | null;
+  status: "hydrated" | "rolled_back";
+  appliedCommands: GraphCommand[];
+  preservedUserFactors: EntityURI[];
+  error?: string;
+}
+
+/**
+ * Hydratoi avoimen `OptimisticNodePatch`-luonnoksen asynkronisen LLM-vastauksen (`AsyncLLMHydration`)
+ * validoiduilla `GraphCommand[]`-komennoilla (TSD 1.3 Invariantti A4 & 8.1):
+ * - Muuttaa ghost-solmun tilasta `definition: "named"` -> `"defined"` ja `ghost.status: "hydrated"`.
+ * - Käyttäjän muokkaussuoja: jos käyttäjä on odotuksen aikana muokannut mitä tahansa tekijää
+ *   tai ghost-solmun parametria (`provenance.source === "user"`), saapuva LLM-hydraatio EI
+ *   ylikirjoita käyttäjän arvoa!
+ * - Jos komennoissa on yksikin epäkelpo komento tai hydraatio epäonnistuu/peruutetaan,
+ *   suoritetaan automaattinen `rollbackOptimisticPatch` versioon `baseVersion` (säilyttäen käyttäjän
+ *   muut odotuksen aikaiset `user`-muokkaukset).
+ */
+export function hydrateOptimisticPatch(
+  graph: EnterpriseGraph,
+  hydration: AsyncLLMHydration & { failed?: boolean; cancelled?: boolean; error?: string },
+): OptimisticHydrationResult {
+  const stack = PATCH_STACKS.get(graph.id) ?? [];
+  const entryIdx = stack.findIndex((e) => e.patch.patchId === hydration.patchId);
+
+  // Tarkista, mitkä tekijät käyttäjä on lukinnut (`provenance.source === "user"`) odotuksen aikana
+  const userLockedFactors = new Map<EntityURI, { value: number; formula?: string; provenance?: typeof graph.factors[string]["provenance"] }>();
+  for (const [fUri, factor] of Object.entries(graph.factors)) {
+    if (factor.provenance?.source === "user") {
+      userLockedFactors.set(fUri as EntityURI, {
+        value: factor.value,
+        formula: factor.formula,
+        provenance: factor.provenance,
+      });
+    }
+  }
+
+  // Jos hydraatio on merkitty epäonnistuneeksi tai peruutetuksi, kumotaan luonnos heti
+  if (hydration.failed || hydration.cancelled) {
+    const rb = rollbackOptimisticPatch(graph, hydration.patchId);
+    for (const [fUri, locked] of userLockedFactors.entries()) {
+      if (rb.graph.factors[fUri]) {
+        rb.graph.factors[fUri]!.value = locked.value;
+        rb.graph.factors[fUri]!.provenance = locked.provenance ?? { source: "user" };
+      }
+    }
+    return {
+      graph: rb.graph,
+      patch: rb.rolledBackPatch
+        ? {
+            ...rb.rolledBackPatch,
+            status: hydration.cancelled ? "cancelled" : "failed",
+          }
+        : null,
+      status: "rolled_back",
+      appliedCommands: [],
+      preservedUserFactors: [...userLockedFactors.keys()],
+      error: hydration.error ?? "Hydration failed or cancelled",
+    };
+  }
+
+  // Validoi kaikki saapuneet komennot ennen suorittamista (Two-Phase Commit)
+  let curGraph = JSON.parse(JSON.stringify(graph)) as EnterpriseGraph;
+  const validated: GraphCommand[] = [];
+  const preservedUserFactors: EntityURI[] = [];
+
+  for (const rawCmd of hydration.streamed ?? []) {
+    const valid = validateGraphCommand(rawCmd, curGraph);
+    if (!valid) {
+      // Yksikin epäkelpo komento -> automaattinen rollback baseVersion-tilaan!
+      const rb = rollbackOptimisticPatch(graph, hydration.patchId);
+      for (const [fUri, locked] of userLockedFactors.entries()) {
+        if (rb.graph.factors[fUri]) {
+          rb.graph.factors[fUri]!.value = locked.value;
+          rb.graph.factors[fUri]!.provenance = locked.provenance ?? { source: "user" };
+        }
+      }
+      return {
+        graph: rb.graph,
+        patch: rb.rolledBackPatch ? { ...rb.rolledBackPatch, status: "failed" } : null,
+        status: "rolled_back",
+        appliedCommands: [],
+        preservedUserFactors: [...userLockedFactors.keys()],
+        error: "Invalid GraphCommand in hydration stream",
+      };
+    }
+
+    if (
+      (valid.type === "set_factor" || valid.type === "set_formula") &&
+      userLockedFactors.has(valid.uri)
+    ) {
+      preservedUserFactors.push(valid.uri);
+    }
+
+    curGraph = applyGraphCommand(curGraph, valid, {
+      provenance: { source: "coach", note: "AsyncLLMHydration" },
+      respectUserLocks: true,
+    });
+    validated.push(valid);
+  }
+
+  // Päivitä ghost-solmut tilaan `definition: "defined"` ja `ghost.status: "hydrated"`
+  const targetGhostUris = new Set<EntityURI>(
+    entryIdx >= 0 ? stack[entryIdx]!.patch.ghostNodes : [],
+  );
+  for (const node of Object.values(curGraph.nodes)) {
+    if (node.ghost?.patchId === hydration.patchId || targetGhostUris.has(node.uri)) {
+      node.definition = "defined";
+      node.ghost = {
+        patchId: hydration.patchId,
+        status: "hydrated",
+        requestedAt: node.ghost?.requestedAt ?? new Date().toISOString(),
+      };
+    }
+  }
+
+  // Aktivoi hydratoidun solmun stub-virrat
+  for (const stream of Object.values(curGraph.streams)) {
+    const fromHydrated =
+      curGraph.nodes[stream.from.node]?.ghost?.patchId === hydration.patchId ||
+      targetGhostUris.has(stream.from.node);
+    const toHydrated =
+      curGraph.nodes[stream.to.node]?.ghost?.patchId === hydration.patchId ||
+      targetGhostUris.has(stream.to.node);
+    if ((fromHydrated || toHydrated) && stream.status === "stub") {
+      stream.status = "active";
+    }
+  }
+
+  let updatedPatch: OptimisticNodePatch | null = null;
+  if (entryIdx >= 0) {
+    updatedPatch = {
+      ...stack[entryIdx]!.patch,
+      status: "hydrated",
+    };
+    const nextStack = [...stack];
+    nextStack.splice(entryIdx, 1);
+    PATCH_STACKS.set(graph.id, nextStack);
+  }
+
+  return {
+    graph: curGraph,
+    patch: updatedPatch,
+    status: "hydrated",
+    appliedCommands: validated,
+    preservedUserFactors,
+  };
+}
+
+/**
+ * Ei-blokkaava taustaorkestrointi (`orchestrateAsyncHydration`, TSD 1.3 A4 & 8.1):
+ * Ajaa asynkronisen LLM-hydraatiotehtävän taustalla (esim. 5 s viiveellä) blokkaamatta
+ * paikallisia `set_factor`-säätimiä, kunnioittaa käyttäjän odotuksen aikana tekemiä
+ * `provenance: "user"` -muokkauksia ja suorittaa automaattisen rollbackin virheen tai
+ * aikakatkaisun sattuessa.
+ */
+export async function orchestrateAsyncHydration(opts: {
+  getGraph: () => EnterpriseGraph;
+  setGraph: (next: EnterpriseGraph) => void;
+  patchId: string;
+  task: () => Promise<AsyncLLMHydration>;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<OptimisticHydrationResult> {
+  const timeoutMs = opts.timeoutMs ?? 5000;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    if (opts.signal?.aborted) {
+      const res = hydrateOptimisticPatch(opts.getGraph(), {
+        patchId: opts.patchId,
+        streamed: [],
+        cancelled: true,
+        error: "Aborted before start",
+      });
+      opts.setGraph(res.graph);
+      return res;
+    }
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Hydration timeout")), timeoutMs);
+    });
+
+    const abortPromise = opts.signal
+      ? new Promise<never>((_, reject) => {
+          opts.signal!.addEventListener(
+            "abort",
+            () => reject(new Error("Hydration cancelled")),
+            { once: true },
+          );
+        })
+      : null;
+
+    const hydration = await Promise.race(
+      abortPromise ? [opts.task(), timeoutPromise, abortPromise] : [opts.task(), timeoutPromise],
+    );
+
+    const res = hydrateOptimisticPatch(opts.getGraph(), hydration);
+    opts.setGraph(res.graph);
+    return res;
+  } catch (err) {
+    const isCancel =
+      opts.signal?.aborted || (err instanceof Error && /cancel|abort/i.test(err.message));
+    const res = hydrateOptimisticPatch(opts.getGraph(), {
+      patchId: opts.patchId,
+      streamed: [],
+      failed: !isCancel,
+      cancelled: isCancel,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    opts.setGraph(res.graph);
+    return res;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }

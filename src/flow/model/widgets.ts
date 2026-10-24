@@ -6,6 +6,9 @@
  * turvallisella kaavatulkilla (formula.ts), joka tuntee vain alla luetellut muuttujat.
  */
 import type { AtomKind, Molecule, RevenueAtom } from "../kernel/types.ts";
+import type { EnterpriseGraph } from "../graph/types.ts";
+import { migrateMoleculeToGraph } from "../graph/migrate.ts";
+import { simulateGraph, type SimulationRun } from "../graph/simulate.ts";
 import { newId } from "../kernel/presets.ts";
 import { isEditableField } from "./edit.ts";
 import type { FlowView } from "./view.ts";
@@ -140,9 +143,57 @@ export interface WidgetContext {
   molecule: Molecule;
   view: FlowView;
   scope: Scope;
+  graph?: EnterpriseGraph;
 }
 
-export function buildScope(m: Molecule, v: FlowView): Scope {
+export function populateGraphFactorsIntoScope(scope: Scope, graph: EnterpriseGraph): void {
+  for (const f of Object.values(graph.factors)) {
+    if (!Number.isFinite(f.value)) continue;
+    scope[f.uri] = f.value;
+    if (f.alias) scope[f.alias] = f.value;
+    const rawPath = f.uri.replace(/^apex:\/\/factor\//, "");
+    const dotted = rawPath.replace(/[^A-Za-z0-9_]+/g, ".");
+    scope[`factor.${dotted}`] = f.value;
+    scope[dotted] = scope[dotted] ?? f.value;
+  }
+}
+
+export function buildGraphWidgetScope(graph: EnterpriseGraph, existingRun?: SimulationRun): Scope {
+  const run = existingRun ?? simulateGraph(graph);
+  const monthlyRevenue = run.totals.revenue / 12;
+  const monthlyVariable = run.totals.variableCosts / 12;
+  const monthlyFixed = run.totals.fixedCosts / 12;
+  const costs = monthlyFixed + monthlyVariable;
+  const contribution = monthlyRevenue - monthlyVariable;
+  const scope: Scope = {
+    revenue: monthlyRevenue,
+    variableCosts: monthlyVariable,
+    fixedCosts: monthlyFixed,
+    costs,
+    contribution,
+    contributionMargin: monthlyRevenue > 0 ? contribution / monthlyRevenue : 0,
+    profit: run.months[0]?.operatingProfit ?? run.totals.operatingProfit / 12,
+    profit12: run.months[run.months.length - 1]?.operatingProfit ?? run.totals.operatingProfit / 12,
+    profitYear: run.totals.operatingProfit,
+    cash: run.endCash,
+    cashMin: run.minCash,
+    cashOutDay: run.cashOutDay === null ? 0 : run.cashOutDay + 1,
+    openingCash: graph.opening.cash,
+    breakEven: contribution > 0 && monthlyRevenue > 0 ? monthlyFixed / (contribution / monthlyRevenue) : 0,
+    marginOfSafety: 0,
+    lostSales: 0,
+    customerTerms: graph.factors["apex://factor/credit_customerTermsDays"]?.value ?? 0,
+    supplierTerms: graph.factors["apex://factor/credit_supplierTermsDays"]?.value ?? 0,
+    ownSalary: 0,
+    founderHours: 40,
+    hourlyWage: 0,
+    livingCosts: 0,
+  };
+  populateGraphFactorsIntoScope(scope, graph);
+  return scope;
+}
+
+export function buildScope(m: Molecule, v: FlowView, graph?: EnterpriseGraph): Scope {
   const f = founderStats(m);
   const costs = v.monthlyFixed + v.monthlyVariable;
   const contribution = v.econ.reduce((s, e) => s + e.contributionPerMonth, 0);
@@ -191,6 +242,7 @@ export function buildScope(m: Molecule, v: FlowView): Scope {
       [`${slug}.usage`]: e.capacity ? Math.min(1, e.demand / e.capacity) : 0,
     });
   }
+  populateGraphFactorsIntoScope(scope, graph ?? migrateMoleculeToGraph(m));
   return scope;
 }
 
@@ -369,6 +421,68 @@ export function evaluateWidget(w: WidgetSpec, ctx: WidgetContext): WidgetResult 
         };
       case "table":
         return { kind: "table", rows: w.rows.map((r) => ({ label: r.label, text: formatWidgetValue(safe(r.formula, ctx.scope), r.format) })), error: null };
+    }
+  } catch (e) {
+    const error = (e as Error).message;
+    switch (w.kind) {
+      case "metric":
+        return { kind: "metric", text: "–", value: null, error };
+      case "alert":
+        return { kind: "alert", active: false, error };
+      case "lever":
+        return { kind: "lever", leverId: null, value: 0, error };
+      case "chart":
+        return { kind: "chart", series: [], error };
+      case "table":
+        return { kind: "table", rows: [], error };
+    }
+  }
+}
+
+export function evaluateGraphWidget(w: WidgetSpec, graph: EnterpriseGraph, existingRun?: SimulationRun): WidgetResult {
+  const run = existingRun ?? simulateGraph(graph);
+  const scope = buildGraphWidgetScope(graph, run);
+  try {
+    switch (w.kind) {
+      case "metric": {
+        const value = safe(w.formula, scope);
+        return { kind: "metric", value, text: formatWidgetValue(value, w.format), error: null };
+      }
+      case "alert":
+        return { kind: "alert", active: !!safe(w.condition, scope), error: null };
+      case "lever": {
+        const factor = Object.values(graph.factors).find(
+          (f) =>
+            f.uri === w.target ||
+            f.alias === w.target ||
+            `factor.${f.uri.replace(/^apex:\/\/factor\//, "").replace(/[^A-Za-z0-9_]+/g, ".")}` === w.target,
+        );
+        return factor ? { kind: "lever", leverId: factor.uri, value: factor.value, error: null } : { kind: "lever", leverId: null, value: 0, error: t("Vivun kohdetta ei enää ole mallissa") };
+      }
+      case "chart": {
+        const months = run.months ?? [];
+        return {
+          kind: "chart",
+          series: w.series.map((s) => ({
+            label: s.label,
+            values: months.map((mo, i) =>
+              safe(s.formula, {
+                ...scope,
+                month: i + 1,
+                "month.revenue": mo.revenue,
+                "month.costs": mo.variableCosts + mo.fixedCosts,
+                "month.profit": mo.operatingProfit,
+                "month.cash": mo.endCash,
+                "month.receivables": mo.endReceivables,
+                "month.season": mo.seasonFactor,
+              }),
+            ),
+          })),
+          error: null,
+        };
+      }
+      case "table":
+        return { kind: "table", rows: w.rows.map((r) => ({ label: r.label, text: formatWidgetValue(safe(r.formula, scope), r.format) })), error: null };
     }
   } catch (e) {
     const error = (e as Error).message;
