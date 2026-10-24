@@ -388,6 +388,15 @@ export interface AdvisorsState {
 
 export function renderAdvisors(rule: AdvisorView[], st: AdvisorsState, llm: boolean): string {
   const stanceIcon = { ok: "🟢", concern: "🟡", alarm: "🔴" } as const;
+  const alarms = rule.filter((a) => a.stance === "alarm").length;
+  const concerns = rule.filter((a) => a.stance === "concern").length;
+  const synthesisText =
+    alarms > 0
+      ? t("Johtoryhmän synteesi: {n} kriittistä hälytystä vaatii välitöntä kassan tai kapasiteetin suojausta.", { n: alarms })
+      : concerns > 0
+        ? t("Johtoryhmän synteesi: {n} osa-alueella havaittu kitkaa – katso ristikkäisvaikutukset alta.", { n: concerns })
+        : t("Johtoryhmän synteesi: Kaikki osa-alueet ovat tasapainossa nykyisillä oletuksilla.");
+
   const cards = rule
     .map(
       (a) => `<article class="ad-card stance-${a.stance}">
@@ -400,10 +409,10 @@ export function renderAdvisors(rule: AdvisorView[], st: AdvisorsState, llm: bool
     .join("");
   const r = st.result;
   const debate = r
-    ? `<section class="fd-section">
+    ? `<section class="fd-section war-room-debate-box">
         <h4>${esc(r.source === "llm" ? t("Neuvonantajien keskustelu") : t("Neuvonantajien näkemykset"))}</h4>
         ${r.statements.map((s) => `<div class="co-msg coach"><b>${ADVISORS[s.role].icon} ${esc(t(ADVISORS[s.role].title))}:</b> ${esc(s.text)}</div>`).join("")}
-        ${r.consensus ? `<p><b>${esc(t("Yhteinen näkemys:"))}</b> ${esc(r.consensus)}</p>` : ""}
+        ${r.consensus ? `<div class="war-room-consensus"><b>${esc(t("Yhteinen näkemys:"))}</b> ${esc(r.consensus)}</div>` : ""}
         ${r.proposals.length ? `<div class="co-actions">${r.proposals.map((p, i) => `<button class="fd-chip" data-action="adv-apply" data-idx="${i}">${esc(p.label)}</button>`).join("")}</div>` : ""}
         ${r.note ? `<p class="co-note">${esc(r.note)}</p>` : ""}
       </section>`
@@ -411,6 +420,9 @@ export function renderAdvisors(rule: AdvisorView[], st: AdvisorsState, llm: bool
   return `${drawerHeader(t("Neuvonantajat"))}
   <div class="fd-body">
     <section class="fd-section">
+      <div class="war-room-synthesis-banner ${alarms > 0 ? "st-banner-crit" : concerns > 0 ? "st-banner-warn" : "st-banner-ok"}">
+        <span>⚖ ${esc(synthesisText)}</span>
+      </div>
       <p class="fd-note">${esc(t("Neljä neuvonantajaa katsoo samaa mallia oman roolinsa silmin. Ehdotukset kulkevat samojen tarkistusten läpi kuin valmentajan muutokset, ja ne voi kumota."))}</p>
       <div class="ad-grid">${cards}</div>
     </section>

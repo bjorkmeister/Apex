@@ -18,7 +18,7 @@ import { handleChat } from "./chat.ts";
 import { handleAdvisors, handleGenesis, handleMarket, handleWidget, llmStatus } from "./ai.ts";
 
 const FLOW_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const ALLOWED_DIRS = new Set(["kernel", "model", "client", "i18n"]);
+const ALLOWED_DIRS = new Set(["kernel", "model", "client", "i18n", "graph"]);
 const FILE_RE = /^[a-z0-9-]+\.ts$/;
 /** Selaimen moduulipolku: /flow/<hakemisto>/<tiedosto>.ts */
 export const MODULE_PATH_RE = /^\/flow\/([a-z0-9]+)\/([^/]+)$/;

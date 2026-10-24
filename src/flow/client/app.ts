@@ -13,11 +13,37 @@ import { simulate } from "../kernel/simulate.ts";
 import { buildView, type FlowView, type NodeId } from "../model/view.ts";
 import { applyLever, leversFor, type Lever } from "../model/levers.ts";
 import { addAtom, addFixedCost, removeAtom, removeFixedCost, renameAtom, renameMolecule, setAtomField, setPayrollDay, updateFixedCost } from "../model/edit.ts";
-import { checklistView, emptyChecklist, setItemParam, toggleItem, type ChecklistState } from "../model/launchpad.ts";
+import {
+  buildGraphLaunchpadView,
+  checklistView,
+  emptyChecklist,
+  setItemParam,
+  toggleItem,
+  type ChecklistState,
+} from "../model/launchpad.ts";
 import { applyCommands, PANELS, type ApplyOptions, type PanelId } from "../model/commands.ts";
 import { coachInsights, type CoachInsight } from "../model/coach.ts";
-import { ALL_TOOLS, LENS_LABELS, PERSONAS, boundaryMessages, lensHeadlines, lensNodes, leversForLens, personaDef, type LensId, type PersonaId } from "../model/personas.ts";
-import { ideaToMolecule } from "../model/genesis.ts";
+import {
+  ALL_TOOLS,
+  LENS_LABELS,
+  MATURITY_HINTS,
+  MATURITY_LABELS,
+  PERSONAS,
+  XRAY_LENS_LABELS,
+  boundaryMessages,
+  defaultMaturityForPersona,
+  lensHeadlines,
+  lensNodes,
+  leversForLens,
+  maturityHeadlines,
+  personaDef,
+  type InspectorTabId,
+  type LensId,
+  type PersonaId,
+  type XRayLensId,
+} from "../model/personas.ts";
+import type { BusinessCapability, EntityURI, Port, VentureMaturity } from "../graph/types.ts";
+import { ideaToMolecule, moleculeToGenesisSpec } from "../model/genesis.ts";
 import { getProvenance, sourceLabel, withProvenance } from "../model/provenance.ts";
 import { buildScope, validateWidget, widgetFromTemplate, formatWidgetValue, type WidgetFormat, type WidgetSpec } from "../model/widgets.ts";
 import { createScenario, SCENARIO_COLORS, type Scenario } from "../model/scenarios.ts";
@@ -29,7 +55,16 @@ import { buildReport } from "../model/report.ts";
 import { analyzeStatement, defaultSelection, importCommands, parseStatementCsv, type ImportSelection, type MonthlyActual, type StatementAnalysis } from "../model/importer.ts";
 import { esc, eur, int, num, pct } from "../model/format.ts";
 import { getLocale, isLocale, setLocale, t, type Locale } from "../i18n/index.ts";
-import { FlowCanvas, renderTimeline, type TimelineOverlay } from "./canvas.ts";
+import { FlowCanvas, renderIcomProcessOverlayHtml, renderTimeline, zoomLevelForPercent, type TimelineOverlay } from "./canvas.ts";
+import {
+  buildStudioGraphState,
+  renderInspectorZone,
+  renderNavigatorZone,
+  renderTimelineBranchZone,
+  searchEntities,
+  type StudioGraphOverrides,
+  type StudioGraphState,
+} from "./inspector.ts";
 import { renderDrawer } from "./drawer.ts";
 import { renderLaunchpad } from "./launchpad.ts";
 import { renderCoachPanel, renderCoachStrip, type ChatMessage } from "./coach.ts";
@@ -82,9 +117,21 @@ interface Snapshot {
 const state = {
   molecule: null as Molecule | null,
   view: null as FlowView | null,
+  graphState: null as StudioGraphState | null,
   checklist: emptyChecklist(),
   persona: "founder" as PersonaId,
   lens: "all" as LensId,
+  xrayLens: "ops" as XRayLensId,
+  maturity: 3 as VentureMaturity,
+  zoomPct: 45,
+  selectedUri: "apex://node/root" as EntityURI,
+  selectedNodeId: "demand" as NodeId,
+  spotlightParentUri: null as EntityURI | null,
+  decomposedUris: new Set<EntityURI>(),
+  graphOverrides: { customBizCaps: [], bizCapStatuses: {}, customPorts: {} } as StudioGraphOverrides,
+  inspectorTab: "physics" as InspectorTabId,
+  navigatorCollapsed: false,
+  searchQuery: "",
   insights: [] as CoachInsight[],
   chat: [] as ChatMessage[],
   chatBusy: false,
@@ -251,6 +298,18 @@ function langToggle(): string {
     .join("")}</div>`;
 }
 
+function presetsDropdownHtml(): string {
+  const items = (Object.keys(PRESET_LABELS) as PresetId[])
+    .map(
+      (p) =>
+        `<button data-action="preset" data-preset="${p}" title="${esc(t(PRESET_LABELS[p].hint))}">${esc(
+          t(PRESET_LABELS[p].title),
+        )}</button>`,
+    )
+    .join("");
+  return `<details class="fl-menu"><summary class="fl-btn ghost">${esc(t("Lataa esimerkkidata"))} ▾</summary><div class="fl-menu-body">${items}</div></details>`;
+}
+
 function renderOnboarding(): void {
   canvas?.destroy();
   canvas = null;
@@ -258,6 +317,17 @@ function renderOnboarding(): void {
   const personas = PERSONAS.map(
     (p) => `<button class="ob-persona ${state.persona === p.id ? "on" : ""}" data-action="set-persona" data-persona="${p.id}" aria-pressed="${state.persona === p.id}" title="${esc(t(p.hint))}">${esc(t(p.title))}</button>`,
   ).join("");
+  const maturityButtons = ([0, 1, 2, 3] as VentureMaturity[])
+    .map(
+      (lvl) => `<button
+        class="maturity-pill ${state.maturity === lvl ? "active" : ""}"
+        data-action="set-onboarding-maturity"
+        data-maturity="${lvl}"
+        aria-pressed="${state.maturity === lvl}"
+        title="${esc(t(MATURITY_HINTS[lvl]))}"
+      >${esc(t(MATURITY_LABELS[lvl]))}</button>`,
+    )
+    .join("");
   const kinds = (Object.keys(ATOM_KIND_LABELS) as AtomKind[])
     .map((k) => {
       const on = state.onboardingKinds.has(k);
@@ -265,33 +335,35 @@ function renderOnboarding(): void {
         <b>${esc(t(ATOM_KIND_LABELS[k].title))}</b><span>${esc(t(ATOM_KIND_LABELS[k].hint))}</span></button>`;
     })
     .join("");
-  const presets = (Object.keys(PRESET_LABELS) as PresetId[])
-    .map((p) => `<button class="ob-preset" data-action="preset" data-preset="${p}"><b>${esc(t(PRESET_LABELS[p].title))}</b><span>${esc(t(PRESET_LABELS[p].hint))}</span></button>`)
-    .join("");
   const tasks = TASKS.map((d) => `<button class="ob-preset" data-action="task-start" data-id="${d.id}"><b>${state.completedTasks.includes(d.id) ? "✅ " : "🎯 "}${esc(t(d.title))}</b><span>${esc(t(d.brief))}</span></button>`).join("");
   root.innerHTML = `
   <header class="fl-header">
-    <div class="fl-brand">APEX <b>Studio</b></div>
-    <div class="fl-header-actions">${langToggle()}<a href="/classic" class="fl-back">${esc(t("Klassinen näkymä"))}</a></div>
+    <div class="fl-brand">APEX <b>Studio</b> <span class="v3-badge">v3.2</span></div>
+    <div class="fl-header-actions">${langToggle()}${presetsDropdownHtml()}<a href="/classic" class="fl-back">${esc(t("Klassinen näkymä"))}</a></div>
   </header>
   <main class="ob-main">
-    <div class="ob-step">${esc(t("Käytän APEXia, koska…"))}</div>
+    <div class="ob-step">${esc(t("1. Rooli ja lähtötilanteen kypsyystaso"))}</div>
     <div class="ob-personas">${personas}</div>
-    <h1>${esc(t("Kerro liikeideasi"))}</h1>
-    <p class="ob-lead">${esc(t("Kuvaile omin sanoin, mitä aiot myydä ja kenelle. APEX rakentaa siitä mallin, jota voit muokata."))}</p>
-    <textarea id="ob-idea" class="ob-idea" rows="3" maxlength="2000" placeholder="${esc(t("Esim. Avaan jäätelökioskin Helsingin rantaan. Alkupääoma 6 000 €."))}">${esc(state.onboardingIdea)}</textarea>
+    <div class="ob-row" style="margin:10px 0 18px;gap:10px;flex-wrap:wrap">
+      <div class="cmd-maturity-group" role="group" aria-label="${esc(t("Yrityksen kypsyystaso"))}">${maturityButtons}</div>
+      <button class="ob-start" data-action="start-blank">${esc(t("Avaa puhdas kanvaasi (Tabula Rasa) →"))}</button>
+    </div>
+    <h1>${esc(t("2. Tai kuvaile organisaatio, prosessi tai liikeidea omin sanoin"))}</h1>
+    <p class="ob-lead">${esc(t("Kuvaile minkä tahansa toimialan organisaatio, yksikkö, tuote tai palveluketju. APEX jäsentää siitä kyvykkyydet ja prosessigraafin."))}</p>
+    <textarea id="ob-idea" class="ob-idea" rows="3" maxlength="2000" placeholder="${esc(t("Kuvaile mikä tahansa organisaatio, yksikkö, tuote tai liikeidea omin sanoin — tai aloita suoraan tyhjältä kanvaasilta."))}">${esc(state.onboardingIdea)}</textarea>
     <div class="ob-row">
       <button class="ob-start" data-action="genesis" ${state.genesisBusy ? "disabled" : ""}>${state.genesisBusy ? esc(t("Rakennetaan…")) : esc(t("Rakenna malli →"))}</button>
       <span class="fd-note">${esc(state.llm ? t("Kielimalli käytössä") : t("Ilman kielimallia: tunnistan toimialan avainsanoista"))}</span>
     </div>
-    <h2>${esc(t("Tai valitse, mitä yrityksesi myy"))}</h2>
-    <label class="ob-name">${esc(t("Yrityksen nimi"))} <input id="ob-name" value="${esc(state.onboardingName)}" placeholder="${esc(t("esim. Oma konsultointi"))}"/></label>
+    <h2>${esc(t("3. Tai valitse universaalit fysiikkamoduulit"))}</h2>
+    <label class="ob-name">${esc(t("Yrityksen nimi"))} <input id="ob-name" value="${esc(state.onboardingName)}" placeholder="${esc(t("esim. Uusi organisaatio tai liiketoimintayksikkö"))}"/></label>
     <div class="ob-cards">${kinds}</div>
     <button class="ob-start secondary" data-action="start" ${state.onboardingKinds.size === 0 ? "disabled" : ""}>${esc(t("Rakenna yritykseni →"))}</button>
-    <h2>${esc(t("Tai aloita esimerkistä"))}</h2>
-    <div class="ob-presets">${presets}</div>
-    <h2>${esc(t("Harjoitustehtävät"))}</h2>
-    <div class="ob-presets">${tasks}</div>
+    ${
+      state.persona === "student"
+        ? `<h2>${esc(t("Harjoitustehtävät"))}</h2><div class="ob-presets">${tasks}</div>`
+        : `<details style="margin-top:20px"><summary class="fd-note" style="cursor:pointer">${esc(t("Harjoitustehtävät"))} (${TASKS.length})</summary><div class="ob-presets" style="margin-top:10px">${tasks}</div></details>`
+    }
     <p class="ob-foot">${esc(t("Kaikki luvut ovat muokattavia oletuksia. Laskelmat ilman arvonlisäveroa. Malli tallentuu vain tähän selaimeen."))}</p>
   </main>`;
 }
@@ -306,16 +378,66 @@ function renderShell(): void {
         .map((l) => `<button class="fl-lens-btn" data-action="set-lens" data-lens="${l}" aria-pressed="${state.lens === l}">${esc(t(LENS_LABELS[l]))}</button>`)
         .join("")}</div>`
     : "";
+  const maturityButtons = ([0, 1, 2, 3] as VentureMaturity[])
+    .map(
+      (lvl) => `<button
+        class="maturity-pill ${state.maturity === lvl ? "active" : ""}"
+        data-action="set-maturity"
+        data-maturity="${lvl}"
+        aria-pressed="${state.maturity === lvl}"
+        title="${esc(t(MATURITY_HINTS[lvl]))}"
+      >${esc(t(MATURITY_LABELS[lvl]))}</button>`,
+    )
+    .join("");
+  const xrayButtons = (Object.keys(XRAY_LENS_LABELS) as XRayLensId[])
+    .map(
+      (xl) => `<button
+        class="xray-pill ${state.xrayLens === xl ? "active" : ""}"
+        data-action="set-xray-lens"
+        data-xray="${xl}"
+        aria-pressed="${state.xrayLens === xl}"
+      >${esc(t(XRAY_LENS_LABELS[xl]))}</button>`,
+    )
+    .join("");
   const primary = p.tools.filter((x) => ALL_TOOLS.includes(x));
   const rest = ALL_TOOLS.filter((x) => !primary.includes(x));
   const toolBtn = (id: string) => `<button class="fl-tool" data-action="open" data-node="${id}">${esc(TOOL_LABELS[id]())}</button>`;
+
   root.innerHTML = `
-  <header class="fl-header">
-    <div class="fl-brand">APEX <b>Studio</b></div>
+  <header class="fl-header zone-command-bar" aria-label="${esc(t("Zone 1 · Komentopalkki"))}">
+    <div class="fl-brand">APEX <b>Studio</b> <span class="v3-badge">v3.2</span></div>
     <input class="fl-name" data-rename-molecule value="${esc(m.name)}" aria-label="${esc(t("Yrityksen nimi"))}"/>
+
+    <div class="cmd-search-wrap">
+      <input
+        id="fl-entity-search"
+        type="search"
+        class="cmd-search-input"
+        value="${esc(state.searchQuery)}"
+        placeholder="${esc(t("Hae apex:// solmuja, kertoimia, rooleja, tilejä…"))}"
+        aria-label="${esc(t("Globaali entiteettihaku"))}"
+      />
+      <div id="fl-search-results" class="cmd-search-dropdown" hidden></div>
+    </div>
+
+    <div class="cmd-maturity-group" role="group" aria-label="${esc(t("Yrityksen kypsyystaso"))}">
+      ${maturityButtons}
+    </div>
+
+    <div class="cmd-xray-group" role="group" aria-label="${esc(t("Röntgenlinssi"))}">
+      ${xrayButtons}
+    </div>
+
+    <div class="cmd-zoom-group" role="group" aria-label="${esc(t("Semanttinen zoom"))}">
+      <button class="zoom-pill ${zoomLevelForPercent(state.zoomPct) === 0 ? "active" : ""}" data-action="set-zoom" data-zoom="15" title="${esc(t("L0 (< 25 %) · Koko yritys"))}">L0</button>
+      <button class="zoom-pill ${zoomLevelForPercent(state.zoomPct) === 1 ? "active" : ""}" data-action="set-zoom" data-zoom="45" title="${esc(t("L1 (25–60 %) · Arvovirta ja tuki"))}">L1</button>
+      <button class="zoom-pill ${zoomLevelForPercent(state.zoomPct) === 2 ? "active" : ""}" data-action="set-zoom" data-zoom="80" title="${esc(t("L2+ (> 60 %) · Tarkenna solmuun"))}">L2+</button>
+    </div>
+
     <div class="fl-header-actions">
       ${langToggle()}
       <label class="fl-persona">${esc(t("Rooli"))} <select data-persona-select aria-label="${esc(t("Rooli"))}">${personaOptions}</select></label>
+      ${presetsDropdownHtml()}
       <button class="fl-btn ghost" data-action="undo" id="fl-undo" title="${esc(t("Kumoa viimeisin muutos"))}" ${state.undo.length ? "" : "disabled"}>↶ ${esc(t("Kumoa"))}</button>
       <button class="fl-btn ${p.launchpad ? "primary" : ""}" data-action="open" data-node="launchpad">🚀 ${esc(t("Perustamislista"))} <span class="fl-badge" id="fl-lp-count"></span></button>
       <details class="fl-menu"><summary class="fl-btn ghost">⋯</summary><div class="fl-menu-body">
@@ -328,37 +450,41 @@ function renderShell(): void {
   <nav class="fl-toolbar" aria-label="${esc(t("Työkalut"))}">${primary.map(toolBtn).join("")}${
     rest.length ? `<details class="fl-menu"><summary class="fl-tool">${esc(t("Lisää työkaluja"))} ▾</summary><div class="fl-menu-body">${rest.map(toolBtn).join("")}</div></details>` : ""
   }</nav>
-  <main class="fl-main">
-    <section class="fl-stage">
-      <div id="fl-task"></div>
-      <div class="fl-headlines" id="fl-headlines"></div>
-      <div id="fl-coach"></div>
-      <div id="fl-widgets"></div>
-      ${p.quickStress ? `<div class="fl-quickstress"><span>${esc(t("Stressitesti:"))}</span>
-        <button class="fd-chip small" data-action="stress" data-volume="-0.25">${esc(t("Myynti −25 %"))}</button>
-        <button class="fd-chip small" data-action="stress" data-price="-0.1">${esc(t("Hinnat −10 %"))}</button>
-        <button class="fd-chip small" data-action="stress" data-fixed="0.15">${esc(t("Kiinteät kulut +15 %"))}</button>
-        <button class="fd-chip small" data-action="stress" data-variable="0.2">${esc(t("Ostohinnat +20 %"))}</button></div>` : ""}
-      <div class="fl-canvas" id="fl-canvas"></div>
-      <div class="fl-timeline">
-        <div class="fl-timeline-bar">
-          <button class="fl-btn" data-action="play" id="fl-play">▶ ${esc(t("Toista vuosi"))}</button>
-          <input type="range" id="fl-day" min="0" max="359" step="1" value="${state.day}" aria-label="${esc(t("Simulaation päivä"))}"/>
-        </div>
-        <div id="fl-timeline" data-action="timeline-click"></div>
-      </div>
-    </section>
-    <aside class="fl-side">
-      <div class="fl-side-head"><h3>${esc(t("Vivut"))}</h3><span>${esc(t("Vedä ja katso mitä tapahtuu"))}</span></div>
-      <div id="fl-levers"></div>
+  <div class="unified-studio-grid">
+    <div id="fl-zone-navigator" class="studio-zone-nav"></div>
+    <main class="fl-main studio-zone-center">
+      <section class="fl-stage" aria-label="${esc(t("Zone 3 · Kanvaasi"))}">
+        <div id="fl-task"></div>
+        <div class="fl-headlines" id="fl-headlines"></div>
+        <div id="fl-coach"></div>
+        <div id="fl-widgets"></div>
+        ${p.quickStress ? `<div class="fl-quickstress"><span>${esc(t("Stressitesti:"))}</span>
+          <button class="fd-chip small" data-action="stress" data-volume="-0.25">${esc(t("Myynti −25 %"))}</button>
+          <button class="fd-chip small" data-action="stress" data-price="-0.1">${esc(t("Hinnat −10 %"))}</button>
+          <button class="fd-chip small" data-action="stress" data-fixed="0.15">${esc(t("Kiinteät kulut +15 %"))}</button>
+          <button class="fd-chip small" data-action="stress" data-variable="0.2">${esc(t("Ostohinnat +20 %"))}</button></div>` : ""}
+        <div id="fl-icom-deck" class="icom-canvas-wrap"></div>
+        <div class="fl-canvas" id="fl-canvas" ${state.maturity <= 1 ? "hidden" : ""}></div>
+      </section>
+    </main>
+    <aside class="fl-side studio-zone-inspector" aria-label="${esc(t("Zone 4 · Tarkastin"))}">
+      <div id="fl-zone-inspector"></div>
+      <details class="legacy-levers-accordion">
+        <summary>${esc(t("Pikavivut (kaikki virrat)"))}</summary>
+        <div id="fl-levers"></div>
+      </details>
     </aside>
-  </main>
+  </div>
+  <div id="fl-zone-timeline" class="studio-zone-timeline"></div>
   <div id="fl-toast" class="fl-toast" role="status" aria-live="polite"></div>
   <input type="file" id="fl-import-file" accept=".csv,text/csv,.txt" hidden/>
   <div id="fl-drawer-backdrop" class="fl-drawer-backdrop" data-action="close-drawer" hidden></div>
   <aside id="fl-drawer" class="fl-drawer" aria-hidden="true"></aside>`;
   canvas?.destroy();
-  canvas = new FlowCanvas($("#fl-canvas")!, (id) => openDrawer(id));
+  canvas = new FlowCanvas($("#fl-canvas")!, (id) => {
+    state.selectedNodeId = id;
+    openDrawer(id);
+  });
 }
 
 const HEADLINE_TARGETS: Record<LensId, NodeId[]> = {
@@ -370,9 +496,13 @@ const HEADLINE_TARGETS: Record<LensId, NodeId[]> = {
 
 function renderHeadlines(v: FlowView): void {
   const targets = HEADLINE_TARGETS[state.lens];
-  $("#fl-headlines")!.innerHTML = lensHeadlines(v, state.lens)
+  const headlines =
+    state.maturity <= 1 && state.graphState
+      ? maturityHeadlines(state.graphState.graph, state.graphState.run)
+      : lensHeadlines(v, state.lens);
+  $("#fl-headlines")!.innerHTML = headlines
     .map(
-      (h, i) => `<button class="fl-headline st-${h.status}" data-action="open" data-node="${targets[i]}">
+      (h, i) => `<button class="fl-headline st-${h.status}" data-action="open" data-node="${targets[i] ?? "demand"}">
         <span class="fl-hl-label">${esc(h.label)}</span>
         <span class="fl-hl-value">${esc(h.value)}</span>
         <span class="fl-hl-sub">${esc(h.sub)}</span>
@@ -497,7 +627,11 @@ function panelHtml(panel: PanelId): string {
   const teach = personaDef(state.persona).teach;
   switch (panel) {
     case "launchpad":
-      return renderLaunchpad(checklistView(m, v, state.checklist));
+      return renderLaunchpad(checklistView(m, v, state.checklist), {
+        graphLp: state.graphState ? buildGraphLaunchpadView(state.graphState.graph, state.checklist) : undefined,
+        architectSpec: moleculeToGenesisSpec(m, state.maturity, "user"),
+        activeTemplateId: state.graphOverrides.templateId,
+      });
     case "coach":
       return renderCoachPanel(state.insights, state.chat, teach, state.chatBusy);
     case "import": {
@@ -554,13 +688,24 @@ function renderDrawerNow(): void {
   backdrop.hidden = false;
 }
 
-/** Laskee näkymän uudelleen ja päivittää kaikki osat. */
+/** Laskee näkymän uudelleen ja päivittää kaikki 5 vyöhykettä (Zones 1–5) < 16 ms vasteajalla. */
 function refresh(opts: { levers?: boolean; persist?: boolean } = {}): void {
   if (!state.molecule) {
     renderOnboarding();
     return;
   }
   state.view = buildView(state.molecule);
+  state.graphState = buildStudioGraphState(
+    state.molecule,
+    state.maturity,
+    state.decomposedUris,
+    state.graphOverrides,
+  );
+  if (!state.graphState.registry.entities.has(state.selectedUri)) {
+    const firstVal = Object.values(state.graphState.graph.nodes).find((n) => n.level === 1 && n.band === "value_stream");
+    state.selectedUri = firstVal ? firstVal.uri : state.graphState.graph.root;
+  }
+
   const lp = checklistView(state.molecule, state.view, state.checklist);
   state.insights = coachInsights(state.molecule, state.view, lp, state.persona);
   renderHeadlines(state.view);
@@ -575,9 +720,59 @@ function refresh(opts: { levers?: boolean; persist?: boolean } = {}): void {
     showToast(`🎉 ${t("Tehtävä ratkaistu!")}`);
     opts.persist = true;
   }
+
+  // Zone 2 · Navigaattori
+  const navHost = $("#fl-zone-navigator");
+  if (navHost) {
+    navHost.innerHTML = renderNavigatorZone(state.graphState, {
+      selectedUri: state.selectedUri,
+      spotlightParentUri: state.spotlightParentUri,
+      collapsed: state.navigatorCollapsed,
+    });
+  }
+
+  // Zone 3 · ICOM / Capability Map + Elävä virtakanvaasi
+  const icomHost = $("#fl-icom-deck");
+  if (icomHost) {
+    icomHost.innerHTML = renderIcomProcessOverlayHtml(state.graphState.graph, state.graphState.run, {
+      zoomPct: state.zoomPct,
+      xrayLens: state.xrayLens,
+      selectedUri: state.selectedUri,
+      spotlightParentUri: state.spotlightParentUri,
+    });
+  }
+  const canvasHost = $("#fl-canvas");
+  if (canvasHost) canvasHost.hidden = state.maturity <= 1;
+
   canvas?.update(state.view);
   canvas?.setFocus(lensNodes(state.lens));
+
+  // Zone 4 · 6-välilehtinen Inspector
+  const insHost = $("#fl-zone-inspector");
+  if (insHost) {
+    withPreservedFocus(insHost, () => {
+      insHost.innerHTML = renderInspectorZone(state.graphState!, state.view!, {
+        selectedUri: state.selectedUri,
+        selectedNodeId: state.selectedNodeId,
+        activeTab: state.inspectorTab,
+        persona: state.persona,
+        lens: state.lens,
+        teach: personaDef(state.persona).teach,
+      });
+    });
+  }
+
+  // Zone 5 · Aikajana ja Git-skenaariohaarat
+  const tlZone = $("#fl-zone-timeline");
+  if (tlZone) {
+    tlZone.innerHTML = renderTimelineBranchZone(state.graphState, state.view, {
+      hoverDay: state.day,
+      scenarios: state.scenarios,
+      compareScenarioId: state.scenarios.find((s) => s.compare)?.id ?? null,
+    });
+  }
   renderTimelineNow();
+
   if (opts.levers) renderLevers();
   else updateLeverOutputs();
   const badge = $("#fl-lp-count");
@@ -590,8 +785,9 @@ function refresh(opts: { levers?: boolean; persist?: boolean } = {}): void {
 function updateLeverOutputs(): void {
   if (!state.molecule) return;
   for (const l of leversFor(state.molecule)) {
-    const out = root.querySelector(`#lvo-${CSS.escape(l.id)}`);
-    if (out) out.textContent = formatLever(l, l.value);
+    root.querySelectorAll(`#lvo-${CSS.escape(l.id)}`).forEach((out) => {
+      out.textContent = formatLever(l, l.value);
+    });
   }
 }
 
@@ -617,7 +813,8 @@ function setMolecule(m: Molecule, structural = false): void {
   refresh({ levers: structural, persist: true });
 }
 
-function startMolecule(m: Molecule, keepTask = false): void {
+function startMolecule(m: Molecule, keepTask = false, hasPresetModel = true, explicitMaturity?: VentureMaturity): void {
+  const pDef = personaDef(state.persona);
   state.molecule = m;
   state.checklist = emptyChecklist();
   state.undo = [];
@@ -626,7 +823,14 @@ function startMolecule(m: Molecule, keepTask = false): void {
   state.market.result = null;
   state.advisors.result = null;
   if (!keepTask) state.task = null;
-  state.lens = personaDef(state.persona).defaultLens;
+  state.lens = pDef.defaultLens;
+  state.xrayLens = pDef.defaultXRayLens;
+  state.maturity = explicitMaturity ?? defaultMaturityForPersona(state.persona, hasPresetModel);
+  state.zoomPct = pDef.defaultZoom;
+  state.inspectorTab = pDef.inspectorTabs[0] ?? "physics";
+  state.spotlightParentUri = null;
+  state.decomposedUris.clear();
+  state.graphOverrides = { customBizCaps: [], bizCapStatuses: {}, customPorts: {} };
   state.day = 0;
   state.drawer = null;
   save();
@@ -879,9 +1083,23 @@ root.addEventListener("click", (ev) => {
       return;
     case "set-persona":
       state.persona = target.dataset.persona as PersonaId;
+      state.maturity = defaultMaturityForPersona(state.persona, false);
       save();
       renderOnboarding();
       return;
+    case "set-onboarding-maturity": {
+      const mLvl = Number(target.dataset.maturity) as VentureMaturity;
+      if (mLvl === 0 || mLvl === 1 || mLvl === 2 || mLvl === 3) {
+        state.maturity = mLvl;
+        renderOnboarding();
+      }
+      return;
+    }
+    case "start-blank": {
+      const mol = emptyMolecule(state.onboardingName.trim() || t("Uusi organisaatio"));
+      startMolecule(mol, false, false, state.maturity);
+      return;
+    }
     case "toggle-kind": {
       const k = target.dataset.kind as AtomKind;
       if (state.onboardingKinds.has(k)) state.onboardingKinds.delete(k);
@@ -933,6 +1151,192 @@ root.addEventListener("click", (ev) => {
       root.querySelectorAll<HTMLElement>(".fl-lens-btn").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.lens === state.lens)));
       refresh({ levers: true, persist: true });
       return;
+    case "set-maturity": {
+      const mLvl = Number(target.dataset.maturity) as VentureMaturity;
+      if (mLvl === 0 || mLvl === 1 || mLvl === 2 || mLvl === 3) {
+        state.maturity = mLvl;
+        if (mLvl === 0) state.spotlightParentUri = null;
+        renderShell();
+        refresh({ levers: true, persist: true });
+      }
+      return;
+    }
+    case "set-xray-lens": {
+      const xl = target.dataset.xray as XRayLensId;
+      if (xl && xl in XRAY_LENS_LABELS) {
+        state.xrayLens = xl;
+        root.querySelectorAll<HTMLElement>(".xray-pill").forEach((b) => {
+          const active = b.dataset.xray === xl;
+          b.classList.toggle("active", active);
+          b.setAttribute("aria-pressed", String(active));
+        });
+        refresh();
+      }
+      return;
+    }
+    case "set-zoom": {
+      const z = Number(target.dataset.zoom);
+      if (Number.isFinite(z)) {
+        state.zoomPct = z;
+        if (zoomLevelForPercent(z) < 2) {
+          state.spotlightParentUri = null;
+        } else if (!state.spotlightParentUri && state.graphState) {
+          const candidate =
+            state.graphState.graph.nodes[state.selectedUri]?.level === 1
+              ? state.selectedUri
+              : Object.values(state.graphState.graph.nodes).find((n) => n.level === 1 && n.band === "value_stream")?.uri ?? null;
+          if (candidate) {
+            state.decomposedUris.add(candidate);
+            state.spotlightParentUri = candidate;
+          }
+        }
+        root.querySelectorAll<HTMLElement>(".zoom-pill").forEach((b) => {
+          b.classList.toggle("active", zoomLevelForPercent(Number(b.dataset.zoom)) === zoomLevelForPercent(state.zoomPct));
+        });
+        refresh();
+      }
+      return;
+    }
+    case "select-entity": {
+      const uri = target.dataset.uri as EntityURI | undefined;
+      if (uri) {
+        state.selectedUri = uri;
+        const drop = $("#fl-search-results");
+        if (drop) drop.hidden = true;
+        refresh();
+      }
+      return;
+    }
+    case "spotlight-node": {
+      const uri = target.dataset.uri as EntityURI | undefined;
+      if (uri) {
+        if (state.spotlightParentUri === uri) {
+          state.spotlightParentUri = null;
+          state.zoomPct = 45;
+        } else {
+          state.decomposedUris.add(uri);
+          state.spotlightParentUri = uri;
+          state.selectedUri = uri;
+          state.zoomPct = 80;
+        }
+        refresh();
+      }
+      return;
+    }
+    case "exit-spotlight":
+      state.spotlightParentUri = null;
+      state.zoomPct = 45;
+      refresh();
+      return;
+    case "select-inspector-tab": {
+      const tab = target.dataset.tab as InspectorTabId | undefined;
+      if (tab) {
+        state.inspectorTab = tab;
+        refresh();
+      }
+      return;
+    }
+    case "toggle-navigator":
+      state.navigatorCollapsed = !state.navigatorCollapsed;
+      refresh();
+      return;
+    case "focus-entity": {
+      const uri = target.dataset.uri as EntityURI | undefined;
+      if (uri) {
+        state.selectedUri = uri;
+        showToast(t("Kohdistettu graafiin: {uri}", { uri }));
+        refresh();
+      }
+      return;
+    }
+    case "cycle-bizcap-status": {
+      const uri = target.dataset.uri as EntityURI | undefined;
+      if (uri && state.graphState) {
+        const cur = state.graphState.graph.businessCapabilities?.[uri]?.status ?? "unclear";
+        const next: BusinessCapability["status"] =
+          cur === "known" ? "unclear" : cur === "unclear" ? "missing" : "known";
+        const stMap = state.graphOverrides.bizCapStatuses ?? (state.graphOverrides.bizCapStatuses = {});
+        stMap[uri] = next;
+        refresh();
+      }
+      return;
+    }
+    case "add-bizcap": {
+      const nameInput = $<HTMLInputElement>("#cap-new-name");
+      const rawName = nameInput?.value.trim() ?? "";
+      if (!rawName) return;
+      const customList = state.graphOverrides.customBizCaps ?? (state.graphOverrides.customBizCaps = []);
+      const slug = rawName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || `cap_${Date.now()}`;
+      const uri = `apex://capability-biz/custom_${slug}_${customList.length + 1}` as EntityURI;
+      customList.push({
+        uri,
+        name: rawName,
+        status: "unclear",
+        rationale: t("Käyttäjän lisäämä liiketoimintakyvykkyys"),
+        dependsOn: [],
+        notes: [],
+        canonicalRef: "CUSTOM",
+        realizedBy: [],
+        provenance: "user",
+      });
+      if (nameInput) nameInput.value = "";
+      state.selectedUri = uri;
+      refresh();
+      return;
+    }
+    case "select-cap-template": {
+      const tplId = target.dataset.templateId;
+      if (tplId) {
+        state.graphOverrides.templateId = tplId;
+        refresh();
+      }
+      return;
+    }
+    case "architect-compile": {
+      if (!m) return;
+      const s1Name = inputValue("arch-s1-name").trim() || m.name;
+      const s6Dso = parseNullableNumber(inputValue("arch-s6-dso")) ?? m.credit.customerTermsDays;
+      const s6Dpo = parseNullableNumber(inputValue("arch-s6-dpo")) ?? m.credit.supplierTermsDays;
+      const s8Cash = parseNullableNumber(inputValue("arch-s8-cash")) ?? m.credit.openingCash;
+      const s8Mat = Math.min(3, Math.max(0, Math.round(parseNullableNumber(inputValue("arch-s8-maturity")) ?? state.maturity))) as VentureMaturity;
+      state.maturity = s8Mat;
+      pushUndo();
+      state.molecule = {
+        ...m,
+        name: s1Name,
+        credit: {
+          ...m.credit,
+          customerTermsDays: Math.max(0, s6Dso),
+          supplierTermsDays: Math.max(0, s6Dpo),
+          openingCash: s8Cash,
+        },
+      };
+      renderShell();
+      refresh({ levers: true, persist: true });
+      showToast(t("8-vaiheinen Architect Mode -spesifikaatio käännetty graafiksi."));
+      return;
+    }
+    case "add-icom-port": {
+      const nodeUri = target.dataset.uri as EntityURI | undefined;
+      const nameEl = $<HTMLInputElement>("#icom-new-port-name");
+      const sideEl = $<HTMLSelectElement>("#icom-new-port-side");
+      const portName = nameEl?.value.trim() ?? "";
+      const side = (sideEl?.value as Port["side"]) || "I";
+      if (!nodeUri || !portName) return;
+      const portsMap = state.graphOverrides.customPorts ?? (state.graphOverrides.customPorts = {});
+      const list = portsMap[nodeUri] ?? [];
+      list.push({
+        id: `custom_${side.toLowerCase()}_${list.length + 1}`,
+        name: portName,
+        side,
+        unit: "apex://unit/items",
+        ratio: { const: 1 },
+      });
+      portsMap[nodeUri] = list;
+      if (nameEl) nameEl.value = "";
+      refresh();
+      return;
+    }
     case "open": {
       const id = target.dataset.node as PanelId;
       if (PANELS.includes(id)) openDrawer(id);
@@ -1161,6 +1565,34 @@ root.addEventListener("input", (ev) => {
     state.onboardingIdea = (el as unknown as HTMLTextAreaElement).value;
     return;
   }
+  if (el.id === "fl-entity-search") {
+    state.searchQuery = el.value;
+    const drop = $("#fl-search-results");
+    if (!drop || !state.graphState) return;
+    const q = el.value.trim();
+    if (!q) {
+      drop.hidden = true;
+      drop.innerHTML = "";
+      return;
+    }
+    const hits = searchEntities(state.graphState.graph, state.graphState.registry, q);
+    if (hits.length === 0) {
+      drop.innerHTML = `<div class="cmd-search-empty">${esc(t("Ei osumia haulle"))}</div>`;
+      drop.hidden = false;
+      return;
+    }
+    drop.innerHTML = hits
+      .map(
+        (h) => `<button class="cmd-search-item" data-action="select-entity" data-uri="${esc(h.uri)}">
+          <span class="csi-kind">${esc(h.kind)}</span>
+          <strong class="csi-title">${esc(t(h.title))}</strong>
+          <span class="csi-uri">${esc(h.subtitle)}</span>
+        </button>`,
+      )
+      .join("");
+    drop.hidden = false;
+    return;
+  }
   if (el.id === "fl-day") {
     stop();
     state.day = Number(el.value);
@@ -1192,7 +1624,12 @@ root.addEventListener("change", (ev) => {
   const el = ev.target as HTMLInputElement | HTMLSelectElement;
   if (el.hasAttribute("data-persona-select")) {
     state.persona = el.value as PersonaId;
-    state.lens = personaDef(state.persona).defaultLens;
+    const pDef = personaDef(state.persona);
+    state.lens = pDef.defaultLens;
+    state.xrayLens = pDef.defaultXRayLens;
+    state.maturity = defaultMaturityForPersona(state.persona, true);
+    state.zoomPct = pDef.defaultZoom;
+    state.inspectorTab = pDef.inspectorTabs[0] ?? "physics";
     save();
     renderShell();
     refresh({ levers: true });
@@ -1226,6 +1663,19 @@ root.addEventListener("change", (ev) => {
   if (d.lever) {
     state.leverDragging = false;
     refresh({ levers: true, persist: true });
+    return;
+  }
+  if (d.lpGap) {
+    const capUri = d.lpGap.slice(4) as EntityURI;
+    const stMap = state.graphOverrides.bizCapStatuses ?? (state.graphOverrides.bizCapStatuses = {});
+    stMap[capUri] = el.checked ? "known" : "unclear";
+    state.checklist = {
+      items: {
+        ...state.checklist.items,
+        [d.lpGap]: { checked: el.checked },
+      },
+    };
+    refresh({ persist: true });
     return;
   }
   if (d.lpToggle || d.lpParam) {
@@ -1317,7 +1767,14 @@ root.addEventListener("change", (ev) => {
 });
 
 document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape" && state.drawer) closeDrawer();
+  if (ev.key === "Escape") {
+    if (state.drawer) closeDrawer();
+    else if (state.spotlightParentUri) {
+      state.spotlightParentUri = null;
+      state.zoomPct = 45;
+      refresh();
+    }
+  }
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === "z" && !(ev.target instanceof HTMLInputElement) && !(ev.target instanceof HTMLTextAreaElement)) {
     ev.preventDefault();
     undo();

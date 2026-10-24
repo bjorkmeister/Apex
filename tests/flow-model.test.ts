@@ -96,7 +96,7 @@ describe("APEX Flow — näkymä ja vivut", () => {
 
 describe("APEX Flow — selainkäännös", () => {
   const flowDir = path.resolve("src/flow");
-  const dirs = ["kernel", "model", "client", "i18n"];
+  const dirs = ["kernel", "model", "client", "i18n", "graph"];
 
   it("7. Jokainen selaimelle tarjottava moduuli kääntyy ja on syntaktisesti kelvollista JavaScriptiä", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "apex-flow-"));

@@ -10,6 +10,8 @@
  * Käyttäjää ohjataan tarkistamaan ajantasaiset luvut lähteestä.
  */
 import type { Molecule } from "../kernel/types.ts";
+import type { EnterpriseGraph, EntityURI, PortSide } from "../graph/types.ts";
+import { analyzeGaps, type GapAnalysisReport, type GapItem } from "../graph/gaps.ts";
 import { addFixedCost, removeFixedCost } from "./edit.ts";
 import { withCustomerTerms } from "../kernel/sensitivity.ts";
 import type { FlowView, NodeId } from "./view.ts";
@@ -56,6 +58,8 @@ export interface ItemState {
   params?: Record<string, number>;
   /** Tallennettu tieto peruutusta varten (esim. aiempi maksuaika). */
   undo?: Record<string, number>;
+  /** Tallennettu EnterpriseGraph-tila (JSON) tarkkaa kumoa-palautusta varten (Invariantti A2). */
+  undoGraphJson?: string;
 }
 
 export interface ChecklistState {
@@ -352,3 +356,343 @@ export function checklistView(m: Molecule, v: FlowView, cl: ChecklistState): Che
   const done = items.filter((i) => i.status === "done").length;
   return { items, done, total: items.length, next: items.find((i) => i.status !== "done") ?? null };
 }
+
+// ===========================================================================
+// v3.2 On-Canvas Graph Launchpad & Maturity 0–1 Gap Integration (Invariantti A2)
+// ===========================================================================
+
+export interface LaunchpadBindingTarget {
+  id: string;
+  targetUri: EntityURI;
+  portSide: PortSide;
+  mutationKind:
+    | "factor_value"
+    | "opening_cash"
+    | "stream_latency"
+    | "mechanism_binding"
+    | "business_capability";
+  description: string;
+}
+
+export interface GraphChecklistUpdate {
+  graph: EnterpriseGraph;
+  checklist: ChecklistState;
+  binding: LaunchpadBindingTarget | null;
+  elapsedMs: number;
+}
+
+export interface GraphLaunchpadView {
+  maturity: 0 | 1 | 2 | 3;
+  mode: "gap_driven" | "graph_bindings";
+  gapReport: GapAnalysisReport;
+  gapItems: (GapItem & { checked: boolean })[];
+  bindings: Record<string, LaunchpadBindingTarget>;
+}
+
+/**
+ * Palauttaa jokaiselle Launchpad-kohdalle sen kohdesolmun/entiteetin ja ICOM-porttikytkennän
+ * (`LaunchpadBindingTarget`, TSD 4.5).
+ */
+export function resolveGraphBindings(graph: EnterpriseGraph): Record<string, LaunchpadBindingTarget> {
+  const valueNode =
+    Object.values(graph.nodes).find((n) => n.level === 1 && n.band === "value_stream") ??
+    graph.nodes[graph.root]!;
+  const enablingNode =
+    Object.values(graph.nodes).find((n) => n.level === 1 && n.band === "enabling") ??
+    valueNode;
+  const roleUri =
+    (Object.keys(graph.capabilities).find((u) => graph.capabilities[u]?.kind === "role") as EntityURI | undefined) ??
+    valueNode.uri;
+
+  return {
+    "company-form": {
+      id: "company-form",
+      targetUri: graph.root,
+      portSide: "C",
+      mutationKind: "opening_cash",
+      description: t("C-portti (Y-tunnus) · Alkukassa −75 €"),
+    },
+    yel: {
+      id: "yel",
+      targetUri: roleUri,
+      portSide: "M",
+      mutationKind: "factor_value",
+      description: t("M-portti (Roolikulu) · YEL-eläkevakuutuskerroin"),
+    },
+    accounting: {
+      id: "accounting",
+      targetUri: enablingNode.uri,
+      portSide: "C",
+      mutationKind: "factor_value",
+      description: t("C-portti (Taloushallinto) · Kirjanpitokerroin"),
+    },
+    insurance: {
+      id: "insurance",
+      targetUri: enablingNode.uri,
+      portSide: "C",
+      mutationKind: "factor_value",
+      description: t("C-portti (Riskienhallinta) · Vakuutuskerroin"),
+    },
+    terms: {
+      id: "terms",
+      targetUri: valueNode.uri,
+      portSide: "C",
+      mutationKind: "stream_latency",
+      description: t("C-portti (Maksuehto 14 pv) · Myyntisaamisten viive"),
+    },
+    "workflow-tool": {
+      id: "workflow-tool",
+      targetUri: valueNode.uri,
+      portSide: "M",
+      mutationKind: "mechanism_binding",
+      description: t("M-portti (Järjestelmäkytkentä) · Läpimenokerroin +15 %"),
+    },
+  };
+}
+
+/**
+ * Muodostaa kypsyystasosta riippuvan Launchpad-näkymän:
+ * - Tasoilla 0–1 tehtävät johdetaan suoraan `analyzeGaps(graph)`-aukkoanalyysistä (`mode: "gap_driven"`).
+ * - Tasoilla 2–3 tehtävät toimivat suorina ICOM-portti- ja kerroinkytkentöinä (`mode: "graph_bindings"`).
+ */
+export function buildGraphLaunchpadView(
+  graph: EnterpriseGraph,
+  cl: ChecklistState,
+): GraphLaunchpadView {
+  const maturity = graph.maturity ?? 3;
+  const gapReport = analyzeGaps(graph);
+  const gapItems = gapReport.gaps.map((g) => ({
+    ...g,
+    checked: !!cl.items[`gap:${g.uri}`]?.checked || graph.businessCapabilities?.[g.uri]?.status === "known",
+  }));
+  return {
+    maturity,
+    mode: maturity <= 1 ? "gap_driven" : "graph_bindings",
+    gapReport,
+    gapItems,
+    bindings: resolveGraphBindings(graph),
+  };
+}
+
+/**
+ * Suorittaa kumottavan, paikallisen (< 16 ms) `EnterpriseGraph`-kytkennän Launchpad-rastista (Invariantti A2).
+ * Kun rasti poistetaan (`checked = false`), graafi palautuu täsmälleen ruksaa edeltäneeseen tilaan.
+ */
+export function toggleGraphLaunchpadItem(
+  graph: EnterpriseGraph,
+  cl: ChecklistState,
+  id: string,
+  checked: boolean,
+): GraphChecklistUpdate {
+  const t0 = performance.now();
+  const prev = cl.items[id];
+  if (!!prev?.checked === checked) {
+    return { graph, checklist: cl, binding: null, elapsedMs: performance.now() - t0 };
+  }
+
+  // Palautus (unchecked / undo): palautetaan täsmälleen tallennettu graafitila
+  if (!checked) {
+    const restored: EnterpriseGraph = prev?.undoGraphJson
+      ? (JSON.parse(prev.undoGraphJson) as EnterpriseGraph)
+      : (JSON.parse(JSON.stringify(graph)) as EnterpriseGraph);
+    return {
+      graph: restored,
+      checklist: {
+        items: {
+          ...cl.items,
+          [id]: { ...prev, checked: false, undoGraphJson: undefined },
+        },
+      },
+      binding: null,
+      elapsedMs: performance.now() - t0,
+    };
+  }
+
+  const undoGraphJson = JSON.stringify(graph);
+  const nextGraph = JSON.parse(undoGraphJson) as EnterpriseGraph;
+  const bindings = resolveGraphBindings(nextGraph);
+
+  // 1. Kypsyystasojen 0–1 aukkoanalyysirasti (`gap:apex://capability-biz/...`)
+  if (id.startsWith("gap:")) {
+    const capUri = id.slice(4) as EntityURI;
+    if (nextGraph.businessCapabilities?.[capUri]) {
+      nextGraph.businessCapabilities[capUri]!.status = "known";
+      nextGraph.businessCapabilities[capUri]!.provenance = "user";
+    }
+    const binding: LaunchpadBindingTarget = {
+      id,
+      targetUri: capUri,
+      portSide: "C",
+      mutationKind: "business_capability",
+      description: t("Kyvykkyys kuitattu kuntoon (status = known)"),
+    };
+    return {
+      graph: nextGraph,
+      checklist: {
+        items: {
+          ...cl.items,
+          [id]: { ...prev, checked: true, undoGraphJson },
+        },
+      },
+      binding,
+      elapsedMs: performance.now() - t0,
+    };
+  }
+
+  // 2. Kypsyystasojen 2–3 ICOM-portti-, kerroin- ja mekanismikytkennät
+  const def = CHECKLIST.find((d) => d.id === id);
+  const params = def ? paramsOf(def, prev) : {};
+  const binding = bindings[id] ?? null;
+
+  switch (id) {
+    case "company-form": {
+      const fee = Math.max(0, params.fee ?? 75);
+      nextGraph.opening.cash -= fee;
+      const rootNode = nextGraph.nodes[nextGraph.root];
+      if (rootNode && !rootNode.ports.some((p) => p.id === "lp_ctrl_company_form")) {
+        rootNode.ports.push({
+          id: "lp_ctrl_company_form",
+          name: t("Y-tunnus ja rekisteröinti"),
+          side: "C",
+          unit: "apex://unit/monetary",
+          ratio: { const: 1 },
+        });
+      }
+      break;
+    }
+    case "yel": {
+      const monthly = yelMonthly(params.income ?? 15000, params.rate ?? 24.4, params.discount ?? 22);
+      const daily = monthly / 30;
+      const factorUri: EntityURI = "apex://factor/lp_yel_daily";
+      nextGraph.factors[factorUri] = {
+        uri: factorUri,
+        name: t("YEL-vakuutus / pv"),
+        alias: "launchpad.yelDaily",
+        kind: "lever",
+        value: daily,
+        unit: "EUR/d",
+        provenance: { source: "launchpad" },
+      };
+      const roleEntry = Object.values(nextGraph.capabilities).find((c) => c.kind === "role");
+      if (roleEntry && roleEntry.kind === "role") {
+        const baseVal =
+          "const" in roleEntry.costPerFtePerTick
+            ? roleEntry.costPerFtePerTick.const
+            : (nextGraph.factors[roleEntry.costPerFtePerTick.factor]?.value ?? 100);
+        if ("factor" in roleEntry.costPerFtePerTick && nextGraph.factors[roleEntry.costPerFtePerTick.factor]) {
+          nextGraph.factors[roleEntry.costPerFtePerTick.factor]!.value = baseVal + daily;
+          nextGraph.factors[roleEntry.costPerFtePerTick.factor]!.provenance = { source: "launchpad" };
+        } else {
+          roleEntry.costPerFtePerTick = { const: baseVal + daily };
+        }
+      }
+      break;
+    }
+    case "accounting":
+    case "insurance": {
+      const monthly = params.amount ?? (id === "accounting" ? 150 : 40);
+      const daily = monthly / 30;
+      const factorUri: EntityURI = `apex://factor/lp_${id}_daily`;
+      nextGraph.factors[factorUri] = {
+        uri: factorUri,
+        name: id === "accounting" ? t("Kirjanpito / pv") : t("Yritysvakuutukset / pv"),
+        alias: `launchpad.${id}Daily`,
+        kind: "lever",
+        value: daily,
+        unit: "EUR/d",
+        provenance: { source: "launchpad" },
+      };
+      const targetNode =
+        Object.values(nextGraph.nodes).find((n) => n.level === 1 && n.band === "enabling") ??
+        Object.values(nextGraph.nodes).find((n) => n.level === 1) ??
+        nextGraph.nodes[nextGraph.root];
+      if (targetNode) {
+        targetNode.ports.push({
+          id: `lp_ctrl_${id}`,
+          name: id === "accounting" ? t("Lakisääteinen kirjanpito") : t("Vastuuvakuutussuoja"),
+          side: "C",
+          unit: "apex://unit/monetary",
+          ratio: { factor: factorUri },
+        });
+        if (targetNode.physics && targetNode.physics.length > 0) {
+          targetNode.physics.push({
+            atom: "time_capacity",
+            params: {
+              capacityPerTick: { const: 1_000_000 },
+              cycleTicks: { const: 0 },
+              firstPassYield: { const: 1 },
+              variableCost: { const: 0 },
+              fixedCostPerTick: { factor: factorUri },
+            },
+          });
+        }
+      }
+      break;
+    }
+    case "terms": {
+      for (const f of Object.values(nextGraph.factors)) {
+        if (f.uri.includes("customerTermsDays") || f.uri.includes("paymentTermsDays")) {
+          f.value = Math.min(14, f.value);
+          f.provenance = { source: "launchpad" };
+        }
+      }
+      for (const s of Object.values(nextGraph.streams)) {
+        s.latencyTicks = { const: 14 };
+      }
+      const valNode = Object.values(nextGraph.nodes).find((n) => n.level === 1 && n.band === "value_stream");
+      if (valNode && !valNode.ports.some((p) => p.id === "lp_ctrl_terms_14d")) {
+        valNode.ports.push({
+          id: "lp_ctrl_terms_14d",
+          name: t("Maksuehto 14 pv"),
+          side: "C",
+          unit: "apex://unit/monetary",
+          ratio: { const: 14 },
+        });
+      }
+      break;
+    }
+    case "workflow-tool": {
+      const sysUri: EntityURI = "apex://system/lp_workflow_automation";
+      nextGraph.capabilities[sysUri] = {
+        kind: "system",
+        uri: sysUri,
+        name: t("Automaatio- ja työnkulkuohjelmisto"),
+        layer: "workflow",
+        fixedCostPerTick: { const: 3 },
+        capex: { const: 0 },
+        availability: { const: 0.999 },
+      };
+      const valNode = Object.values(nextGraph.nodes).find((n) => n.level === 1 && n.band === "value_stream");
+      if (valNode) {
+        valNode.mechanisms.push({
+          capability: sysUri,
+          capacityContribution: { const: 1_000_000 },
+          modifiers: { throughput: { const: 1.15 } },
+          critical: false,
+          fallbackMultiplier: { const: 1 },
+        });
+        valNode.ports.push({
+          id: "lp_mech_workflow",
+          name: t("Työnkulkuautomaatio (+15 %)"),
+          side: "M",
+          unit: "apex://unit/hours",
+          ratio: { const: 1.15 },
+        });
+      }
+      break;
+    }
+  }
+
+  return {
+    graph: nextGraph,
+    checklist: {
+      items: {
+        ...cl.items,
+        [id]: { ...prev, checked: true, undoGraphJson },
+      },
+    },
+    binding,
+    elapsedMs: performance.now() - t0,
+  };
+}
+
